@@ -88,19 +88,26 @@ LLM_BASE_URL=https://token.sensenova.cn/v1
 If `LLM_API_KEY` is unset, the endpoint returns a deterministic placeholder reply
 instead of calling a model.
 
-### Talk to the agent from the terminal
+### 本地测试
 
 Start the service, then send a chat request. The response is an SSE stream: each
 `message_delta` event carries a text chunk, and the stream ends with `done`.
 
+1. Start the service (leave running in one terminal):
+
 ```bash
-# 1. Start the service (leave running in one terminal)
 uv run uvicorn app.main:app --reload --port 8010
+```
 
-# 2. Health check
+2. Health check:
+
+```bash
 curl -s localhost:8010/health
+```
 
-# 3. Stream a chat response (-N disables curl buffering so tokens appear live)
+3. Stream a chat response (`-N` disables curl buffering so tokens appear live):
+
+```bash
 curl -N -X POST localhost:8010/api/v1/agent/stream \
   -H 'content-type: application/json' \
   -d '{
@@ -108,8 +115,11 @@ curl -N -X POST localhost:8010/api/v1/agent/stream \
         "message": "Recommend one quiet travel spot in one sentence.",
         "client_type": "web"
       }'
+```
 
-# 4. With a conversation id and preferences (e.g. reply in Chinese)
+4. With a conversation id and preferences (e.g. reply in Chinese):
+
+```bash
 curl -N -X POST localhost:8010/api/v1/agent/stream \
   -H 'content-type: application/json' \
   -d '{
@@ -121,7 +131,7 @@ curl -N -X POST localhost:8010/api/v1/agent/stream \
       }'
 ```
 
-To see only the streamed text (strip the SSE envelope):
+5. See only the streamed text (strip the SSE envelope):
 
 ```bash
 curl -sN -X POST localhost:8010/api/v1/agent/stream \
