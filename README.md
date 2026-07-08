@@ -28,6 +28,36 @@ Web / iOS
 - httpx for internal calls to the existing Zentra Express backend.
 - pytest, respx, ruff, and mypy for verification.
 
+## Project Structure
+
+```text
+zentra-agent/
+├── app/                     # Application package
+│   ├── main.py              # FastAPI app: /health + mounts the agent router
+│   ├── config.py            # Env-driven, frozen settings (pydantic-settings) + get_settings()
+│   ├── llm.py               # OpenAI-compatible chat model factory (get_chat_model)
+│   ├── api/
+│   │   └── agent.py         # POST /api/v1/agent/stream — SSE streaming endpoint
+│   └── schemas/             # Pydantic contracts (immutable, one concern per file)
+│       ├── chat.py          # AgentStreamRequest, PreferencesSnapshot, ClientType
+│       ├── events.py        # Stream events as a `type`-discriminated union (StreamEvent)
+│       └── tools.py         # ToolResponse envelope + ToolStatus
+├── tests/                   # pytest suite (network-free)
+│   ├── test_config.py       # Settings loading, defaults, immutability, caching
+│   ├── test_schemas.py      # Request/event validation (Phase 1 acceptance cases)
+│   └── test_agent_stream.py # Endpoint: LLM / fallback / error / 422 paths
+├── docs/NOTES.md            # Scope notes
+├── DEVELOPMENT_PLAN.md      # Full phased implementation plan
+├── pyproject.toml           # Dependencies, ruff/mypy/pytest config
+├── .env.example             # Environment variable template
+└── README.md
+```
+
+Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `schemas` define the
+contracts → `config`/`llm` provide configuration and the model client. Packages for later
+phases (`tools` for MCP, `agent` for LangGraph, `adapters` for backend clients) will be added
+when those features land.
+
 ## Local Development
 
 ```bash
