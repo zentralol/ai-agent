@@ -32,9 +32,9 @@ Web / iOS
 
 ```bash
 cd zentra-agent
-python -m venv .venv
+uv venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 cp .env.example .env
 uvicorn app.main:app --reload --port 8010
 ```
