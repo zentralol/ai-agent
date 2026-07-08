@@ -1,2 +1,1 @@
-"""MCP tool definitions and deterministic planning helpers."""
-
+"""MCP tool definitions for AI access to backend-owned capabilities."""
