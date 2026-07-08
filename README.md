@@ -88,7 +88,7 @@ LLM_BASE_URL=https://token.sensenova.cn/v1
 If `LLM_API_KEY` is unset, the endpoint returns a deterministic placeholder reply
 instead of calling a model.
 
-### 本地测试
+### Local Testing
 
 Start the service, then send a chat request. The response is an SSE stream: each
 `message_delta` event carries a text chunk, and the stream ends with `done`.
