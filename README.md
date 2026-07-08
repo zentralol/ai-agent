@@ -117,17 +117,17 @@ curl -N -X POST localhost:8010/api/v1/agent/stream \
       }'
 ```
 
-4. With a conversation id and preferences (e.g. reply in Chinese):
+4. With a conversation id and preferences:
 
 ```bash
 curl -N -X POST localhost:8010/api/v1/agent/stream \
   -H 'content-type: application/json' \
   -d '{
         "user_id": "u1",
-        "message": "用一句话推荐一个适合避开人群的旅行地点",
+        "message": "Recommend one quiet travel spot in one sentence.",
         "client_type": "web",
         "conversation_id": "c1",
-        "preferences": { "language": "zh" }
+        "preferences": { "crowd_tolerance": "low", "preferred_transport": "walk" }
       }'
 ```
 
