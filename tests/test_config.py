@@ -46,7 +46,7 @@ def test_reads_and_coerces_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_settings_are_frozen() -> None:
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
     with pytest.raises(ValidationError):
-        settings.port = 1234  # type: ignore[misc]
+        settings.port = 1234
 
 
 def test_get_settings_is_cached() -> None:
