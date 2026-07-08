@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-from fastapi.responses import ORJSONResponse
 
 from app.api.agent import router as agent_router
 
@@ -10,7 +9,6 @@ app = FastAPI(
         "Backend-only conversational AI agent for Zentra. "
         "Exposes a health check and a streaming chat endpoint."
     ),
-    default_response_class=ORJSONResponse,
 )
 
 app.include_router(agent_router)
