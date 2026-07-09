@@ -146,8 +146,9 @@ Initial MCP tools:
 
 ## 7. Agent Workflow
 
-Use a generic bounded model/tool loop now, then move the same state machine into LangGraph
-when graph-level observability and branching are needed.
+Use LangChain `create_agent` now. It provides the initial LangGraph-backed model/tool
+runner, while keeping room to expand into a custom LangGraph workflow when graph-level
+observability, branching, persistence, or human interrupts are needed.
 
 Initial graph:
 

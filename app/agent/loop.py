@@ -1,17 +1,17 @@
-"""Generic model/tool execution loop for the chat agent."""
+"""LangChain agent runner adapted to Zentra's streaming event contract."""
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
 from typing import Any, cast
 
-import orjson
 import structlog
+from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
+from langgraph.errors import GraphRecursionError
 
 from app.schemas.chat import AgentStreamRequest
 from app.schemas.events import (
@@ -38,76 +38,60 @@ SYSTEM_PROMPT = (
 )
 
 
-@dataclass(frozen=True)
-class ModelToolCall:
-    """Normalized representation of a model-requested tool call."""
-
-    name: str
-    args: Mapping[str, object]
-    call_id: str
-
-
 async def run_agent_loop(
     request: AgentStreamRequest,
     model: BaseChatModel,
     tools: tuple[BaseTool, ...],
     max_tool_steps: int = MAX_TOOL_STEPS,
 ) -> AsyncIterator[StreamEvent]:
-    """Run the model/tool loop until the model stops requesting tools."""
+    """Run a LangChain agent and adapt its updates to the public stream contract."""
 
-    messages: list[BaseMessage] = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=request.message),
-    ]
-    tool_config = _tool_config(request)
-    tools_by_name = {tool.name: tool for tool in tools}
-    model_with_tools = _bind_tools(model, tools)
-
-    for step in range(max_tool_steps):
-        try:
-            assistant_message = await _invoke_model(model_with_tools, messages)
-        except Exception:
-            logger.exception("agent_model_step_failed", user_id=request.user_id)
-            yield ErrorEvent(
-                code="LLM_ERROR",
-                message="The assistant failed to generate a response. Please try again.",
-            )
-            return
-
-        messages.append(assistant_message)
-
-        text = _message_text(assistant_message)
-        if text:
-            yield MessageDeltaEvent(text=text)
-
-        tool_calls = _extract_tool_calls(assistant_message, step=step)
-        if not tool_calls:
-            yield DoneEvent(conversation_id=request.conversation_id)
-            return
-
-        for tool_call in tool_calls:
-            yield ToolStartedEvent(tool_name=tool_call.name)
-            result = await _execute_tool_call(tool_config, tools_by_name, tool_call)
-            yield ToolFinishedEvent(tool_name=tool_call.name, result=result)
-            messages.append(
-                ToolMessage(
-                    content=_tool_result_content(result),
-                    tool_call_id=tool_call.call_id,
-                )
-            )
-
-    logger.warning(
-        "agent_tool_step_limit_reached",
-        user_id=request.user_id,
-        max_tool_steps=max_tool_steps,
-    )
-    yield ErrorEvent(
-        code="TOOL_STEP_LIMIT_REACHED",
-        message="The assistant used too many tool steps. Please try a narrower request.",
+    agent = cast(
+        Any,
+        create_agent(
+            model=model,
+            tools=list(tools),
+            system_prompt=SYSTEM_PROMPT,
+        ),
     )
 
+    try:
+        async for update in agent.astream(
+            _agent_input(request),
+            config=_tool_config(request, max_tool_steps),
+            stream_mode="updates",
+        ):
+            for event in _stream_events_from_update(update):
+                yield event
+    except GraphRecursionError:
+        logger.warning(
+            "agent_tool_step_limit_reached",
+            user_id=request.user_id,
+            max_tool_steps=max_tool_steps,
+        )
+        yield ErrorEvent(
+            code="TOOL_STEP_LIMIT_REACHED",
+            message="The assistant used too many tool steps. Please try a narrower request.",
+        )
+        return
+    except Exception:
+        logger.exception("agent_model_step_failed", user_id=request.user_id)
+        yield ErrorEvent(
+            code="LLM_ERROR",
+            message="The assistant failed to generate a response. Please try again.",
+        )
+        return
 
-def _tool_config(request: AgentStreamRequest) -> RunnableConfig:
+    yield DoneEvent(conversation_id=request.conversation_id)
+
+
+def _agent_input(request: AgentStreamRequest) -> dict[str, list[BaseMessage]]:
+    return {"messages": [HumanMessage(content=request.message)]}
+
+
+def _tool_config(
+    request: AgentStreamRequest, max_tool_steps: int
+) -> RunnableConfig:
     """Build runtime config injected into LangChain tools."""
 
     return {
@@ -115,20 +99,51 @@ def _tool_config(request: AgentStreamRequest) -> RunnableConfig:
             "user_id": request.user_id,
             "request_id": request.request_id,
             "conversation_id": request.conversation_id,
-        }
+        },
+        "recursion_limit": _recursion_limit(max_tool_steps),
     }
 
 
-def _bind_tools(model: BaseChatModel, tools: tuple[BaseTool, ...]) -> Any:
-    """Bind all registered tools to the model."""
+def _recursion_limit(max_tool_steps: int) -> int:
+    """Map public tool-step budget to LangGraph's model/tool graph steps."""
 
-    return cast(Any, model).bind_tools(list(tools))
+    return max(2, (max_tool_steps * 2) + 2)
 
 
-async def _invoke_model(model_with_tools: Any, messages: list[BaseMessage]) -> BaseMessage:
-    """Invoke a LangChain chat model and return a message."""
+def _stream_events_from_update(update: object) -> list[StreamEvent]:
+    events: list[StreamEvent] = []
 
-    return cast(BaseMessage, await model_with_tools.ainvoke(messages))
+    for message in _messages_from_update(update, "model"):
+        text = _message_text(message)
+        if text:
+            events.append(MessageDeltaEvent(text=text))
+        for tool_name in _tool_names_from_message(message):
+            events.append(ToolStartedEvent(tool_name=tool_name))
+
+    for message in _messages_from_update(update, "tools"):
+        if not isinstance(message, ToolMessage):
+            continue
+        tool_name = message.name or "unknown_tool"
+        result = _coerce_tool_response(message.content, tool_name)
+        events.append(ToolFinishedEvent(tool_name=tool_name, result=result))
+
+    return events
+
+
+def _messages_from_update(update: object, node_name: str) -> list[BaseMessage]:
+    if not isinstance(update, Mapping):
+        return []
+
+    raw_node = update.get(node_name)
+    if not isinstance(raw_node, Mapping):
+        return []
+
+    raw_messages = raw_node.get("messages")
+    if isinstance(raw_messages, BaseMessage):
+        return [raw_messages]
+    if not isinstance(raw_messages, list):
+        return []
+    return [message for message in raw_messages if isinstance(message, BaseMessage)]
 
 
 def _message_text(message: BaseMessage) -> str:
@@ -146,50 +161,33 @@ def _message_text(message: BaseMessage) -> str:
     return ""
 
 
-def _extract_tool_calls(message: BaseMessage, step: int) -> list[ModelToolCall]:
-    """Extract normalized tool calls from LangChain or raw OpenAI message shapes."""
+def _tool_names_from_message(message: BaseMessage) -> list[str]:
+    """Extract model-requested tool names from a LangChain message."""
 
     tool_calls = getattr(message, "tool_calls", None)
     if isinstance(tool_calls, list) and tool_calls:
-        parsed = [
-            _parse_langchain_tool_call(tool_call, fallback_id=f"tool-{step}-{index}")
-            for index, tool_call in enumerate(tool_calls)
-        ]
-        return [tool_call for tool_call in parsed if tool_call is not None]
+        names = [_tool_name_from_langchain_call(tool_call) for tool_call in tool_calls]
+        return [name for name in names if name is not None]
 
     raw_tool_calls = message.additional_kwargs.get("tool_calls")
     if isinstance(raw_tool_calls, list):
-        parsed = [
-            _parse_openai_tool_call(tool_call, fallback_id=f"tool-{step}-{index}")
-            for index, tool_call in enumerate(raw_tool_calls)
-        ]
-        return [tool_call for tool_call in parsed if tool_call is not None]
+        names = [_tool_name_from_openai_call(tool_call) for tool_call in raw_tool_calls]
+        return [name for name in names if name is not None]
 
     return []
 
 
-def _parse_langchain_tool_call(
-    tool_call: object, fallback_id: str
-) -> ModelToolCall | None:
+def _tool_name_from_langchain_call(tool_call: object) -> str | None:
     if not isinstance(tool_call, Mapping):
         return None
 
     raw_name = tool_call.get("name")
     if not isinstance(raw_name, str) or not raw_name:
         return None
-
-    raw_args = tool_call.get("args")
-    args: Mapping[str, object] = raw_args if isinstance(raw_args, Mapping) else {}
-
-    raw_id = tool_call.get("id")
-    call_id = raw_id if isinstance(raw_id, str) and raw_id else fallback_id
-
-    return ModelToolCall(name=raw_name, args=args, call_id=call_id)
+    return raw_name
 
 
-def _parse_openai_tool_call(
-    tool_call: object, fallback_id: str
-) -> ModelToolCall | None:
+def _tool_name_from_openai_call(tool_call: object) -> str | None:
     if not isinstance(tool_call, Mapping):
         return None
 
@@ -200,56 +198,7 @@ def _parse_openai_tool_call(
     raw_name = function.get("name")
     if not isinstance(raw_name, str) or not raw_name:
         return None
-
-    args = _decode_tool_arguments(function.get("arguments"))
-
-    raw_id = tool_call.get("id")
-    call_id = raw_id if isinstance(raw_id, str) and raw_id else fallback_id
-
-    return ModelToolCall(name=raw_name, args=args, call_id=call_id)
-
-
-def _decode_tool_arguments(raw_arguments: object) -> Mapping[str, object]:
-    if isinstance(raw_arguments, Mapping):
-        return raw_arguments
-    if not isinstance(raw_arguments, str):
-        return {}
-
-    try:
-        decoded = orjson.loads(raw_arguments)
-    except orjson.JSONDecodeError:
-        return {}
-    if not isinstance(decoded, Mapping):
-        return {}
-    return decoded
-
-
-async def _execute_tool_call(
-    config: RunnableConfig,
-    tools_by_name: Mapping[str, BaseTool],
-    tool_call: ModelToolCall,
-) -> ToolResponse:
-    tool = tools_by_name.get(tool_call.name)
-    if tool is None:
-        return ToolResponse(
-            status=ToolStatus.ERROR,
-            summary=f"Unknown tool requested: {tool_call.name}.",
-            data={"tool_name": tool_call.name},
-            next_actions=["Continue without this tool or choose a registered tool."],
-        )
-
-    try:
-        raw_result = await tool.ainvoke(dict(tool_call.args), config=config)
-    except Exception:
-        logger.exception("agent_tool_failed", tool_name=tool_call.name)
-        return ToolResponse(
-            status=ToolStatus.ERROR,
-            summary=f"Tool failed: {tool_call.name}.",
-            data={"tool_name": tool_call.name},
-            next_actions=["Continue without this tool result or ask a clarifying question."],
-        )
-
-    return _coerce_tool_response(raw_result, tool_call.name)
+    return raw_name
 
 
 def _coerce_tool_response(raw_result: object, tool_name: str) -> ToolResponse:
@@ -279,7 +228,3 @@ def _coerce_tool_response(raw_result: object, tool_name: str) -> ToolResponse:
         summary=f"Tool returned a result: {tool_name}.",
         data={"content": str(raw_result)},
     )
-
-
-def _tool_result_content(result: ToolResponse) -> str:
-    return orjson.dumps(result.model_dump(mode="json")).decode("utf-8")

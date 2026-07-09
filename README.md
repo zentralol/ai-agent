@@ -22,7 +22,7 @@ Web / iOS
 
 - FastAPI for health and streaming chat endpoints.
 - LangGraph as the main stateful agent orchestration runtime.
-- LangChain components only where useful for models, prompts, and structured output.
+- LangChain `create_agent` for model/tool orchestration.
 - FastMCP for internal tool exposure.
 - Pydantic for request, response, state, and tool schemas.
 - httpx for internal calls to the existing Zentra Express backend.
@@ -37,7 +37,7 @@ zentra-agent/
 │   ├── config.py            # Env-driven, frozen settings (pydantic-settings) + get_settings()
 │   ├── llm.py               # OpenAI-compatible chat model factory (get_chat_model)
 │   ├── agent/
-│   │   └── loop.py          # Generic model/tool loop with bounded tool steps
+│   │   └── loop.py          # create_agent runner adapted to Zentra SSE events
 │   ├── api/
 │   │   └── agent.py         # POST /api/v1/agent/stream — SSE streaming endpoint
 │   ├── tools/
@@ -60,9 +60,10 @@ zentra-agent/
 └── README.md
 ```
 
-Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `agent/loop` runs the
-bounded model/tool loop → `tools/catalog` provides the LangChain tool list → `tools` owns
-server-side capabilities → `schemas` define contracts → `config`/`llm` provide
+Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `agent/loop` runs a
+LangChain `create_agent` graph and adapts updates to SSE → `tools/catalog` provides the
+LangChain tool list → `tools` owns server-side capabilities → `schemas` define contracts
+→ `config`/`llm` provide
 configuration and the model client. Packages for later phases (`adapters` for backend
 clients) will be added when those features land.
 
@@ -72,9 +73,10 @@ Clients and the Express gateway should not send arbitrary preference snapshots i
 chat request. The model receives a narrow `get_user_preferences` tool schema and decides
 whether stored preferences are needed for the current answer.
 
-The agent uses a generic tool-calling loop: every model turn can return text, tool calls,
-or both. Tool results are appended back to the conversation as tool messages, and the model
-continues until it stops requesting tools or hits the bounded step limit.
+The agent uses LangChain `create_agent`: every model turn can return text, tool calls,
+or both. LangGraph tool updates are adapted into Zentra's `tool_started` and
+`tool_finished` SSE events, and the graph continues until the model stops requesting tools
+or hits the bounded step limit.
 
 The tool:
 

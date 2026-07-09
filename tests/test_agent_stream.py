@@ -5,14 +5,19 @@ The chat model dependency is overridden with fakes so tests never hit a network.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, cast
+from typing import Any
 
 import orjson
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.callbacks.manager import CallbackManagerForLLMRun
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.outputs import ChatResult
+from langchain_core.tools import BaseTool
+from pydantic import Field
 
 import app.tools.preferences as preference_tools
 from app.llm import get_chat_model
@@ -24,33 +29,66 @@ from app.tools.preferences import GET_USER_PREFERENCES_TOOL_NAME
 
 client = TestClient(app)
 
+_ToolDefinition = dict[str, Any] | type | Callable[..., Any] | BaseTool
 
-class _FakeModel:
+
+class _FakeModel(FakeMessagesListChatModel):
     """Minimal stand-in for a LangChain chat model."""
+
+    bound_tools: list[object] | None = None
+    messages_by_call: list[list[BaseMessage]] = Field(default_factory=list)
 
     def __init__(
         self,
         responses: list[AIMessage] | None = None,
     ) -> None:
-        self._responses = responses or [AIMessage(content="Hello there!")]
-        self.bound_tools: list[object] | None = None
-        self.messages_by_call: list[list[BaseMessage]] = []
+        model_responses: list[BaseMessage] = (
+            list(responses) if responses is not None else [AIMessage(content="Hello there!")]
+        )
+        super().__init__(responses=model_responses)
 
-    def bind_tools(self, tools: list[Any]) -> _FakeModel:
-        self.bound_tools = tools
+    def bind_tools(
+        self,
+        tools: Sequence[_ToolDefinition],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> _FakeModel:
+        self.bound_tools = list(tools)
         return self
 
-    async def ainvoke(self, messages: object) -> AIMessage:
-        self.messages_by_call.append(cast(list[BaseMessage], messages))
-        index = min(len(self.messages_by_call) - 1, len(self._responses) - 1)
-        return self._responses[index]
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        self.messages_by_call.append(messages)
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
 
-class _FailingModel:
-    def bind_tools(self, tools: list[Any]) -> _FailingModel:
+class _FailingModel(FakeMessagesListChatModel):
+    def __init__(self) -> None:
+        responses: list[BaseMessage] = [AIMessage(content="")]
+        super().__init__(responses=responses)
+
+    def bind_tools(
+        self,
+        tools: Sequence[_ToolDefinition],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> _FailingModel:
         return self
 
-    async def ainvoke(self, messages: object) -> AIMessage:
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
         raise RuntimeError("boom")
 
 
