@@ -176,7 +176,7 @@ uv run uvicorn app.main:app --reload --port 8010
 curl -s localhost:8010/health
 ```
 
-3. Stream a chat response (`-N` disables curl buffering so tokens appear live):
+3. Stream a chat response (`-N` disables curl buffering so SSE events appear live):
 
 ```bash
 curl -N -X POST localhost:8010/api/v1/agent/stream \

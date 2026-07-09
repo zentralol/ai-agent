@@ -19,7 +19,7 @@ DEFAULT_TEMPERATURE = 0.7
 
 @lru_cache(maxsize=1)
 def get_chat_model() -> ChatOpenAI | None:
-    """Return a cached streaming chat model, or ``None`` if unconfigured."""
+    """Return a cached chat model, or ``None`` if unconfigured."""
 
     settings = get_settings()
     if not settings.llm_api_key:
@@ -29,6 +29,8 @@ def get_chat_model() -> ChatOpenAI | None:
         model=settings.llm_model,
         api_key=SecretStr(settings.llm_api_key),
         base_url=settings.llm_base_url,
-        streaming=True,
+        # SenseNova/DeepSeek-compatible streamed tool calls can omit name/id chunks.
+        # Keep model calls non-streaming; the API still streams typed SSE events.
+        streaming=False,
         temperature=DEFAULT_TEMPERATURE,
     )
