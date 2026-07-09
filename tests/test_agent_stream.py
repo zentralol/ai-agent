@@ -5,15 +5,21 @@ The chat model dependency is overridden with fakes so tests never hit a network.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
+from typing import cast
 
 import orjson
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import BaseMessage
 
 from app.llm import get_chat_model
 from app.main import app
 from app.schemas.events import EventType
+from app.schemas.preferences import PreferenceCategory
+from app.schemas.tools import ToolResponse, ToolStatus
+from app.tools.preferences import get_user_preference_tool
 
 client = TestClient(app)
 
@@ -28,8 +34,10 @@ class _FakeModel:
 
     def __init__(self, chunks: list[str]) -> None:
         self._chunks = chunks
+        self.messages: list[BaseMessage] | None = None
 
     async def astream(self, messages: object) -> AsyncIterator[_FakeChunk]:
+        self.messages = cast(list[BaseMessage], messages)
         for text in self._chunks:
             yield _FakeChunk(text)
 
@@ -38,6 +46,29 @@ class _FailingModel:
     async def astream(self, messages: object) -> AsyncIterator[_FakeChunk]:
         raise RuntimeError("boom")
         yield _FakeChunk("")  # pragma: no cover - unreachable, makes this an async gen
+
+
+class _FakePreferenceTool:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[PreferenceCategory, ...]]] = []
+
+    async def get_user_preferences(
+        self, user_id: str, categories: tuple[PreferenceCategory, ...]
+    ) -> ToolResponse:
+        self.calls.append((user_id, categories))
+        return ToolResponse(
+            status=ToolStatus.SUCCESS,
+            summary="Loaded user preferences.",
+            data={
+                "categories": [category.value for category in categories],
+                "preferences": {
+                    "crowd_tolerance": "low",
+                    "preferred_transport": "walk",
+                    "language": "zh",
+                },
+                "source": "test",
+            },
+        )
 
 
 def _override_model(model: object) -> Iterator[None]:
@@ -49,8 +80,10 @@ def _override_model(model: object) -> Iterator[None]:
 
 
 @pytest.fixture
-def fake_llm() -> Iterator[None]:
-    yield from _override_model(_FakeModel(["Hello", " there", "!"]))
+def fake_llm() -> Iterator[_FakeModel]:
+    model = _FakeModel(["Hello", " there", "!"])
+    with _dependency_override(get_chat_model, model):
+        yield model
 
 
 @pytest.fixture
@@ -61,6 +94,24 @@ def no_llm() -> Iterator[None]:
 @pytest.fixture
 def failing_llm() -> Iterator[None]:
     yield from _override_model(_FailingModel())
+
+
+@pytest.fixture
+def fake_preference_tool() -> Iterator[_FakePreferenceTool]:
+    tool = _FakePreferenceTool()
+    with _dependency_override(get_user_preference_tool, tool):
+        yield tool
+
+
+@contextmanager
+def _dependency_override(
+    dependency: Callable[..., object], value: object
+) -> Iterator[None]:
+    app.dependency_overrides[dependency] = lambda: value
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(dependency, None)
 
 
 def _parse_sse(body: str) -> list[dict[str, object]]:
@@ -87,7 +138,7 @@ def test_health_ok() -> None:
     assert response.json() == {"status": "ok", "service": "zentra-agent"}
 
 
-def test_stream_llm_tokens_become_deltas(fake_llm: None) -> None:
+def test_stream_llm_tokens_become_deltas(fake_llm: _FakeModel) -> None:
     response = client.post("/api/v1/agent/stream", json=_valid_payload())
 
     assert response.status_code == 200
@@ -98,6 +149,44 @@ def test_stream_llm_tokens_become_deltas(fake_llm: None) -> None:
     assert "".join(str(e["text"]) for e in deltas) == "Hello there!"
     assert events[-1]["type"] == EventType.DONE.value
     assert events[-1]["conversation_id"] == "conv-9"
+
+
+def test_stream_loads_preferences_for_planning_request(
+    fake_llm: _FakeModel, fake_preference_tool: _FakePreferenceTool
+) -> None:
+    payload = _valid_payload()
+    payload["message"] = "帮我规划一条人少的路线"
+
+    response = client.post("/api/v1/agent/stream", json=payload)
+
+    assert response.status_code == 200
+    assert fake_preference_tool.calls
+    user_id, categories = fake_preference_tool.calls[0]
+    assert user_id == "u1"
+    assert PreferenceCategory.CROWD in categories
+    assert PreferenceCategory.TRANSPORT in categories
+
+    events = _parse_sse(response.text)
+    assert events[0] == {
+        "type": EventType.TOOL_STARTED.value,
+        "tool_name": "get_user_preferences",
+    }
+    assert events[1]["type"] == EventType.TOOL_FINISHED.value
+    assert events[1]["tool_name"] == "get_user_preferences"
+
+    assert fake_llm.messages is not None
+    system_message = fake_llm.messages[0]
+    assert "Controlled user preference data" in str(system_message.content)
+    assert '"crowd_tolerance":"low"' in str(system_message.content)
+
+
+def test_stream_does_not_load_preferences_for_plain_chat(
+    fake_llm: _FakeModel, fake_preference_tool: _FakePreferenceTool
+) -> None:
+    response = client.post("/api/v1/agent/stream", json=_valid_payload())
+
+    assert response.status_code == 200
+    assert fake_preference_tool.calls == []
 
 
 def test_stream_fallback_when_no_llm(no_llm: None) -> None:

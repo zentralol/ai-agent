@@ -15,7 +15,7 @@ Web / iOS
       -> LangGraph conversation workflow
       -> FastMCP internal tools
       -> Existing Express backend capabilities
-      -> Agent-owned Supabase tables for runs and traces
+      -> Supabase user preferences + agent-owned run/trace tables
 ```
 
 ## Planned Stack
@@ -38,9 +38,12 @@ zentra-agent/
 │   ├── llm.py               # OpenAI-compatible chat model factory (get_chat_model)
 │   ├── api/
 │   │   └── agent.py         # POST /api/v1/agent/stream — SSE streaming endpoint
+│   ├── tools/
+│   │   └── preferences.py   # Controlled get_user_preferences tool backed by Supabase
 │   └── schemas/             # Pydantic contracts (immutable, one concern per file)
-│       ├── chat.py          # AgentStreamRequest, PreferencesSnapshot, ClientType
+│       ├── chat.py          # AgentStreamRequest, ClientType
 │       ├── events.py        # Stream events as a `type`-discriminated union (StreamEvent)
+│       ├── preferences.py   # PreferenceCategory and sanitized UserPreferences
 │       └── tools.py         # ToolResponse envelope + ToolStatus
 ├── tests/                   # pytest suite (network-free)
 │   ├── test_config.py       # Settings loading, defaults, immutability, caching
@@ -53,10 +56,28 @@ zentra-agent/
 └── README.md
 ```
 
-Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `schemas` define the
-contracts → `config`/`llm` provide configuration and the model client. Packages for later
-phases (`tools` for MCP, `agent` for LangGraph, `adapters` for backend clients) will be added
-when those features land.
+Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `tools` owns
+server-side capabilities → `schemas` define contracts → `config`/`llm` provide
+configuration and the model client. Packages for later phases (`agent` for LangGraph and
+`adapters` for backend clients) will be added when those features land.
+
+## Preference Lookup
+
+Clients and the Express gateway should not send arbitrary preference snapshots in the
+chat request. The agent loads preferences only when they are relevant through the
+controlled `get_user_preferences` tool.
+
+The tool:
+
+- uses the authenticated `user_id` from the internal request context;
+- lets the model/router request only narrow categories such as `crowd`, `transport`,
+  `budget`, `accessibility`, `language`, and `interests`;
+- queries Supabase with server-side credentials;
+- returns a compact `ToolResponse` payload;
+- treats stored preference text as data, not system instructions.
+
+If Supabase is not configured, chat still works. The preference tool returns a warning and
+the agent continues with neutral defaults or asks a clarifying question.
 
 ## Local Development
 
@@ -117,7 +138,8 @@ curl -N -X POST localhost:8010/api/v1/agent/stream \
       }'
 ```
 
-4. With a conversation id and preferences:
+4. With a conversation id. For planning/recommendation requests, the agent will load
+   relevant preferences through `get_user_preferences` when Supabase is configured:
 
 ```bash
 curl -N -X POST localhost:8010/api/v1/agent/stream \
@@ -126,8 +148,7 @@ curl -N -X POST localhost:8010/api/v1/agent/stream \
         "user_id": "u1",
         "message": "Recommend one quiet travel spot in one sentence.",
         "client_type": "web",
-        "conversation_id": "c1",
-        "preferences": { "crowd_tolerance": "low", "preferred_transport": "walk" }
+        "conversation_id": "c1"
       }'
 ```
 

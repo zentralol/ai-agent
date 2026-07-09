@@ -1,6 +1,6 @@
 """Pydantic schemas for requests, responses, state, and tools."""
 
-from app.schemas.chat import AgentStreamRequest, ClientType, PreferencesSnapshot
+from app.schemas.chat import AgentStreamRequest, ClientType
 from app.schemas.events import (
     EVENT_TYPES,
     BackendCapabilityResultEvent,
@@ -13,12 +13,14 @@ from app.schemas.events import (
     ToolStartedEvent,
     WarningEvent,
 )
+from app.schemas.preferences import PreferenceCategory, UserPreferences
 from app.schemas.tools import ToolResponse, ToolStatus
 
 __all__ = [
     "AgentStreamRequest",
     "ClientType",
-    "PreferencesSnapshot",
+    "PreferenceCategory",
+    "UserPreferences",
     "EVENT_TYPES",
     "EventType",
     "StreamEvent",

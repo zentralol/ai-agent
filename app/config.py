@@ -33,10 +33,17 @@ class Settings(BaseSettings):
     llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
     llm_base_url: str | None = Field(default=None, alias="LLM_BASE_URL")
 
-    # Supabase is only for agent-owned tables, never client-side access.
+    # Supabase access stays server-side. It is used for controlled preference
+    # lookup and later for agent-owned run/trace tables.
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
     supabase_service_role_key: str | None = Field(
         default=None, alias="SUPABASE_SERVICE_ROLE_KEY"
+    )
+    supabase_user_preferences_table: str = Field(
+        default="user_preferences", alias="SUPABASE_USER_PREFERENCES_TABLE"
+    )
+    supabase_timeout_seconds: float = Field(
+        default=3.0, alias="SUPABASE_TIMEOUT_SECONDS"
     )
 
 

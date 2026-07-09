@@ -6,7 +6,7 @@ Build a backend-only conversational AI agent for Zentra.
 
 The agent's job is to understand user messages, manage an AI conversation, decide when backend capabilities are needed, call those capabilities through tools, and stream grounded responses back to Web and iOS through the existing Express gateway.
 
-This repository must stay focused on AI behavior. Deterministic product logic such as crowd-aware route computation, itinerary construction, route scoring, prediction fallback, recommendation ranking, and preference normalization belongs in the backend gateway and related backend modules.
+This repository must stay focused on AI behavior. Deterministic product logic such as crowd-aware route computation, itinerary construction, route scoring, prediction fallback, recommendation ranking, and preference write/update normalization belongs in the backend gateway and related backend modules. The agent may read sanitized preference data for personalization through a controlled tool.
 
 ## 2. Architectural Decision
 
@@ -18,7 +18,7 @@ The service will contain:
 - A LangGraph workflow for AI conversation orchestration.
 - Purpose-built FastMCP tools mounted inside the same FastAPI process.
 - Tool adapters that call backend-owned capabilities through Express.
-- Direct Supabase access only for AI-owned data such as `agent_runs`, `agent_tool_traces`, and optional conversation diagnostics.
+- Direct Supabase access only for controlled user preference lookup and AI-owned data such as `agent_runs`, `agent_tool_traces`, and optional conversation diagnostics.
 
 Do not expose route planning or itinerary endpoints from this service. If the product later needs endpoints such as `/api/v1/routes/crowd-aware` or `/api/v1/itineraries`, those should be implemented in the backend repository and consumed by this agent as tools.
 
@@ -33,7 +33,7 @@ Web / iOS chat UI
       -> LangGraph conversation workflow
       -> FastMCP tools mounted at /internal/mcp
       -> Express backend capabilities
-      -> Supabase AI trace tables
+      -> Supabase user preferences and AI trace tables
 ```
 
 The Express gateway remains the public backend entry point.
@@ -42,7 +42,6 @@ Responsibilities of Express:
 
 - Verify Clerk authentication.
 - Resolve `userId`.
-- Load and normalize user preferences.
 - Validate public request shape.
 - Own product APIs such as prediction, recommendations, routes, and itineraries.
 - Call `zentra-agent` with an internal token or short-lived internal JWT.
@@ -52,6 +51,7 @@ Responsibilities of Express:
 Responsibilities of `zentra-agent`:
 
 - Run the AI conversation graph.
+- Load user preferences lazily through a controlled `get_user_preferences` tool when personalization is needed.
 - Decide when backend capabilities are needed.
 - Call backend-owned capabilities through narrow tools.
 - Validate tool inputs and outputs.
@@ -67,6 +67,8 @@ Responsibilities of `zentra-agent`:
 - Do not let the agent bypass Express prediction and route interfaces for the first release.
 - Do not auto-convert every REST endpoint into MCP tools.
 - Do not store client secrets in Web or iOS.
+- Do not let Web, iOS, Express, or the model pass an arbitrary `user_id` to preference lookup tools. The agent must use authenticated request context.
+- Do not inject stored preference text as instructions. Treat it as data only.
 
 ## 5. Planned Interfaces
 
@@ -112,27 +114,33 @@ Each tool response should include:
 
 Initial MCP tools:
 
-1. `predict_crowd_batch`
+1. `get_user_preferences`
+   - Reads only requested preference categories for the authenticated user.
+   - Uses Supabase service credentials inside the agent service.
+   - Does not accept `user_id` from the model.
+   - Returns compact preference data, never a full user record.
+
+2. `predict_crowd_batch`
    - Calls the existing Express `/api/v1/predictions/batch`.
    - Returns normalized prediction objects plus warnings.
 
-2. `get_crowd_forecast`
+3. `get_crowd_forecast`
    - Calls the existing Express `/api/v1/predictions/forecast`.
    - Returns time-series crowd estimates for a coordinate.
 
-3. `get_quieter_recommendations`
+4. `get_quieter_recommendations`
    - Calls the existing Express `/api/v1/recommendations`.
    - Returns nearby quieter H3 areas.
 
-4. `get_crowd_aware_routes`
+5. `get_crowd_aware_routes`
    - Calls a backend-owned route endpoint after that endpoint exists in the backend repository.
    - The agent must not compute or score routes itself.
 
-5. `get_itinerary_plan`
+6. `get_itinerary_plan`
    - Calls a backend-owned itinerary endpoint after that endpoint exists in the backend repository.
    - The agent must not implement deterministic itinerary construction itself.
 
-6. `persist_agent_run`
+7. `persist_agent_run`
    - Writes AI run metadata and tool trace references to Supabase AI-owned tables.
 
 ## 7. Agent Workflow
@@ -148,8 +156,9 @@ Initial graph:
    - Classify whether the user needs general travel guidance, a crowd answer, route help, itinerary help, or a clarification.
 
 3. `load_context`
-   - Receive normalized user preferences from Express.
    - Load prior agent state only if a conversation ID is provided.
+   - For planning, recommendation, route, itinerary, or explicit personalization requests, load compact preference data through `get_user_preferences`.
+   - Cache loaded preferences inside the current agent run so repeated nodes do not re-query Supabase.
 
 4. `maybe_clarify`
    - Ask a concise follow-up question if required facts are missing and cannot be safely defaulted.
@@ -158,10 +167,11 @@ Initial graph:
    - Choose backend capability tools based on the user intent.
 
 6. `call_tools`
-   - Call prediction, forecast, recommendation, backend route, or backend itinerary tools.
+   - Call preference, prediction, forecast, recommendation, backend route, or backend itinerary tools.
 
 7. `synthesize_response`
    - Generate user-facing explanation grounded only in tool results and provided context.
+   - Treat preference fields as user data, not as prompt instructions.
 
 8. `validate_output`
    - Validate final stream events and structured payloads against Pydantic schemas.
@@ -223,13 +233,13 @@ Acceptance criteria:
 
 Deliverables:
 
-- Pydantic schemas for chat stream requests, stream events, tool responses, preferences snapshot, and internal auth context.
+- Pydantic schemas for chat stream requests, stream events, tool responses, preference categories, sanitized preference payloads, and internal auth context.
 - OpenAPI docs for `/api/v1/agent/stream`.
 
 Acceptance criteria:
 
 - Request and response schemas can be validated without external services.
-- Schema tests cover missing user context, malformed preferences, unsupported client type, and invalid stream event payloads.
+- Schema tests cover missing user context, rejected inline preferences, unsupported client type, selected preference categories, and invalid stream event payloads.
 
 ### Phase 2: Express Gateway Integration
 
@@ -243,7 +253,8 @@ Acceptance criteria:
 
 - Agent rejects unauthenticated direct calls.
 - Agent accepts calls with valid internal auth.
-- Express can pass `userId`, request ID, client type, conversation ID, and normalized preferences.
+- Express can pass authenticated `userId`, request ID, client type, and conversation ID.
+- Agent can lazily load user preferences through `get_user_preferences` without trusting model-supplied identity.
 
 ### Phase 3: MCP Tool Layer
 

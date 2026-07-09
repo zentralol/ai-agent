@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from app.schemas.chat import AgentStreamRequest, ClientType, PreferencesSnapshot
+from app.schemas.chat import AgentStreamRequest, ClientType
 from app.schemas.events import (
     DoneEvent,
     ErrorEvent,
@@ -14,6 +14,7 @@ from app.schemas.events import (
     StreamEvent,
     ToolFinishedEvent,
 )
+from app.schemas.preferences import PreferenceCategory, UserPreferences, dump_selected_preferences
 from app.schemas.tools import ToolResponse, ToolStatus
 
 _stream_event_adapter: TypeAdapter[StreamEvent] = TypeAdapter(StreamEvent)
@@ -25,7 +26,6 @@ def test_valid_request_parses() -> None:
         "user_id": "user-1",
         "message": "Where is quiet nearby?",
         "client_type": "web",
-        "preferences": {"crowd_tolerance": "low", "language": "en"},
     }
 
     # Act
@@ -33,9 +33,6 @@ def test_valid_request_parses() -> None:
 
     # Assert
     assert request.client_type is ClientType.WEB
-    assert request.preferences == PreferencesSnapshot(
-        crowd_tolerance="low", language="en"
-    )
 
 
 def test_missing_user_context_rejected() -> None:
@@ -59,14 +56,14 @@ def test_unsupported_client_type_rejected() -> None:
         )
 
 
-def test_malformed_preferences_wrong_type_rejected() -> None:
+def test_inline_preferences_rejected() -> None:
     with pytest.raises(ValidationError):
         AgentStreamRequest.model_validate(
             {
                 "user_id": "u1",
                 "message": "hi",
                 "client_type": "web",
-                "preferences": "not-an-object",
+                "preferences": {"crowd_tolerance": "low"},
             }
         )
 
@@ -87,6 +84,22 @@ def test_request_is_immutable() -> None:
     request = AgentStreamRequest(user_id="u1", message="hi", client_type=ClientType.WEB)
     with pytest.raises(ValidationError):
         request.user_id = "u2"
+
+
+def test_selected_preferences_only_returns_requested_categories() -> None:
+    preferences = UserPreferences(
+        crowd_tolerance="low",
+        preferred_transport="walk",
+        language="zh",
+        interests=["parks"],
+    )
+
+    selected = dump_selected_preferences(
+        preferences,
+        (PreferenceCategory.CROWD, PreferenceCategory.LANGUAGE),
+    )
+
+    assert selected == {"crowd_tolerance": "low", "language": "zh"}
 
 
 @pytest.mark.parametrize(
