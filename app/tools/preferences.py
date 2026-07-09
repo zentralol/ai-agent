@@ -2,66 +2,66 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import logging
+from collections.abc import Mapping
 from functools import lru_cache
+from time import perf_counter
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from postgrest.exceptions import APIError
+from supabase import AsyncClient, AsyncClientOptions, acreate_client
 
 from app.config import Settings, get_settings
-from app.schemas.preferences import (
-    PreferenceCategory,
-    UserPreferences,
-    dump_selected_preferences,
-)
+from app.schemas.preferences import UserPreferences
 from app.schemas.tools import ToolResponse, ToolStatus
 
 GET_USER_PREFERENCES_TOOL_NAME = "get_user_preferences"
-
-
-def parse_preference_categories(value: object) -> tuple[PreferenceCategory, ...]:
-    """Parse model-requested category strings into the allowed enum set."""
-
-    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
-        return ()
-
-    parsed: list[PreferenceCategory] = []
-    for item in value:
-        if isinstance(item, PreferenceCategory):
-            parsed.append(item)
-            continue
-        if not isinstance(item, str):
-            continue
-        try:
-            parsed.append(PreferenceCategory(item))
-        except ValueError:
-            continue
-    return _dedupe_categories(parsed)
+logger = logging.getLogger("zentra_agent.tools.preferences")
 
 
 @tool
-async def get_user_preferences(
-    categories: list[PreferenceCategory],
-    config: RunnableConfig,
-) -> str:
+async def get_user_preferences(config: RunnableConfig) -> str:
     """Load compact, sanitized user preferences when personalization is needed."""
 
+    request_id = _configurable_string(config, "request_id")
+    conversation_id = _configurable_string(config, "conversation_id")
     user_id = _configurable_string(config, "user_id")
+    started_at = perf_counter()
+
+    logger.info(
+        "tool_call_start tool=%s request_id=%s conversation_id=%s user=%s",
+        GET_USER_PREFERENCES_TOOL_NAME,
+        request_id,
+        conversation_id,
+        _masked_identifier(user_id),
+    )
     if user_id is None:
-        return _tool_response_content(
-            ToolResponse(
-                status=ToolStatus.ERROR,
-                summary="User preferences cannot be loaded without authenticated user context.",
-                next_actions=["Continue without stored preferences for this response."],
-            )
+        result = ToolResponse(
+            status=ToolStatus.ERROR,
+            summary="User preferences cannot be loaded without authenticated user context.",
+            next_actions=["Continue without stored preferences for this response."],
         )
+        _log_tool_result(
+            result=result,
+            started_at=started_at,
+            request_id=request_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        return _tool_response_content(result)
 
     result = await get_user_preference_tool().get_user_preferences(
         user_id=user_id,
-        categories=parse_preference_categories(categories),
+    )
+    _log_tool_result(
+        result=result,
+        started_at=started_at,
+        request_id=request_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
     )
     return _tool_response_content(result)
 
@@ -71,37 +71,38 @@ class UserPreferenceTool:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._client: AsyncClient | None = None
 
-    async def get_user_preferences(
-        self, user_id: str, categories: Sequence[PreferenceCategory]
-    ) -> ToolResponse:
-        """Return a tool envelope containing only requested preference groups."""
-
-        requested_categories = _dedupe_categories(categories)
-        if not requested_categories:
-            return ToolResponse(
-                status=ToolStatus.WARNING,
-                summary="No preference categories were requested.",
-            )
+    async def get_user_preferences(self, user_id: str) -> ToolResponse:
+        """Return a tool envelope containing all stored preferences for one user."""
 
         if (
             self._settings.supabase_url is None
             or self._settings.supabase_service_role_key is None
         ):
+            logger.warning(
+                "preferences_tool_supabase_unconfigured table=%s user=%s",
+                self._settings.supabase_user_preferences_table,
+                _masked_identifier(user_id),
+            )
             return ToolResponse(
                 status=ToolStatus.WARNING,
                 summary="User preferences are unavailable because Supabase is not configured.",
-                data={"categories": [category.value for category in requested_categories]},
                 next_actions=["Continue with neutral defaults or ask a clarifying question."],
             )
 
         try:
             row = await self._fetch_preference_row(user_id)
-        except httpx.HTTPError:
+        except (APIError, httpx.HTTPError) as exc:
+            logger.exception(
+                "preferences_tool_supabase_query_failed table=%s user=%s error_type=%s",
+                self._settings.supabase_user_preferences_table,
+                _masked_identifier(user_id),
+                type(exc).__name__,
+            )
             return ToolResponse(
                 status=ToolStatus.ERROR,
                 summary="Failed to load user preferences from Supabase.",
-                data={"categories": [category.value for category in requested_categories]},
                 next_actions=["Continue without stored preferences for this response."],
             )
 
@@ -110,57 +111,92 @@ class UserPreferenceTool:
                 status=ToolStatus.SUCCESS,
                 summary="No stored user preferences were found.",
                 data={
-                    "categories": [category.value for category in requested_categories],
                     "preferences": {},
                     "source": "supabase",
                 },
             )
 
         preferences = _preferences_from_row(row)
-        selected = dump_selected_preferences(preferences, requested_categories)
         return ToolResponse(
             status=ToolStatus.SUCCESS,
             summary="Loaded user preferences.",
             data={
-                "categories": [category.value for category in requested_categories],
-                "preferences": selected,
+                "preferences": preferences.model_dump(mode="json"),
                 "source": "supabase",
             },
         )
 
     async def _fetch_preference_row(self, user_id: str) -> Mapping[str, Any] | None:
+        client = await self._get_client()
+        if client is None:
+            return None
+
+        started_at = perf_counter()
+        logger.info(
+            "preferences_tool_supabase_query_start table=%s filter=user_id.eq.%s",
+            self._settings.supabase_user_preferences_table,
+            _masked_identifier(user_id),
+        )
+        response = await (
+            client.table(self._settings.supabase_user_preferences_table)
+            .select("*")
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        if response is None:
+            logger.info(
+                "preferences_tool_supabase_query_end table=%s found=false duration_ms=%.2f",
+                self._settings.supabase_user_preferences_table,
+                _duration_ms(started_at),
+            )
+            return None
+        payload = response.data
+
+        if payload is None:
+            logger.info(
+                "preferences_tool_supabase_query_end table=%s found=false duration_ms=%.2f",
+                self._settings.supabase_user_preferences_table,
+                _duration_ms(started_at),
+            )
+            return None
+        if isinstance(payload, Mapping):
+            logger.info(
+                "preferences_tool_supabase_query_end table=%s found=true "
+                "returned_columns=%s duration_ms=%.2f",
+                self._settings.supabase_user_preferences_table,
+                sorted(str(key) for key in payload),
+                _duration_ms(started_at),
+            )
+            return payload
+        logger.warning(
+            "preferences_tool_supabase_unexpected_payload table=%s payload_type=%s "
+            "duration_ms=%.2f",
+            self._settings.supabase_user_preferences_table,
+            type(payload).__name__,
+            _duration_ms(started_at),
+        )
+        return None
+
+    async def _get_client(self) -> AsyncClient | None:
         supabase_url = self._settings.supabase_url
         service_role_key = self._settings.supabase_service_role_key
         if supabase_url is None or service_role_key is None:
             return None
-
-        table_name = quote(self._settings.supabase_user_preferences_table, safe="")
-        url = f"{supabase_url.rstrip('/')}/rest/v1/{table_name}"
-        headers = {
-            "apikey": service_role_key,
-            "authorization": f"Bearer {service_role_key}",
-            "accept": "application/json",
-        }
-        params = {
-            "user_id": f"eq.{user_id}",
-            "select": "*",
-            "limit": "1",
-        }
-
-        async with httpx.AsyncClient(
-            timeout=self._settings.supabase_timeout_seconds
-        ) as client:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            payload = response.json()
-
-        if not isinstance(payload, list) or not payload:
-            return None
-
-        first = payload[0]
-        if not isinstance(first, Mapping):
-            return None
-        return first
+        if self._client is None:
+            logger.info(
+                "preferences_tool_supabase_client_init table=%s timeout_seconds=%s",
+                self._settings.supabase_user_preferences_table,
+                self._settings.supabase_timeout_seconds,
+            )
+            self._client = await acreate_client(
+                supabase_url=supabase_url,
+                supabase_key=service_role_key,
+                options=AsyncClientOptions(
+                    postgrest_client_timeout=self._settings.supabase_timeout_seconds
+                ),
+            )
+        return self._client
 
 
 @lru_cache(maxsize=1)
@@ -183,27 +219,55 @@ def _tool_response_content(result: ToolResponse) -> str:
     return result.model_dump_json()
 
 
-def _dedupe_categories(
-    categories: Sequence[PreferenceCategory],
-) -> tuple[PreferenceCategory, ...]:
-    return tuple(dict.fromkeys(categories))
+def _log_tool_result(
+    result: ToolResponse,
+    started_at: float,
+    request_id: str | None,
+    conversation_id: str | None,
+    user_id: str | None,
+) -> None:
+    preferences = result.data.get("preferences")
+    preference_keys = (
+        sorted(preferences)
+        if isinstance(preferences, Mapping) and preferences
+        else []
+    )
+    logger.info(
+        "tool_call_end tool=%s status=%s request_id=%s conversation_id=%s "
+        "user=%s duration_ms=%.2f summary=%r preference_keys=%s",
+        GET_USER_PREFERENCES_TOOL_NAME,
+        result.status.value,
+        request_id,
+        conversation_id,
+        _masked_identifier(user_id),
+        _duration_ms(started_at),
+        result.summary,
+        preference_keys,
+    )
+
+
+def _duration_ms(started_at: float) -> float:
+    return (perf_counter() - started_at) * 1000
+
+
+def _masked_identifier(value: str | None) -> str:
+    if value is None:
+        return "<missing>"
+    if len(value) <= 8:
+        return f"{value[:2]}***"
+    return f"{value[:4]}...{value[-4:]}"
 
 
 def _preferences_from_row(row: Mapping[str, Any]) -> UserPreferences:
-    nested_preferences = row.get("preferences")
-    raw: dict[str, Any] = {}
-    if isinstance(nested_preferences, Mapping):
-        raw.update(nested_preferences)
-    raw.update({key: row[key] for key in UserPreferences.model_fields if key in row})
-
     return UserPreferences(
-        travel_style=_optional_string(raw.get("travel_style")),
-        crowd_tolerance=_optional_string(raw.get("crowd_tolerance")),
-        preferred_transport=_optional_string(raw.get("preferred_transport")),
-        budget=_optional_string(raw.get("budget")),
-        accessibility=_string_list(raw.get("accessibility")),
-        language=_optional_string(raw.get("language")),
-        interests=_string_list(raw.get("interests")),
+        travel_pace=_optional_string(row.get("travel_pace")),
+        crowd_tolerance=_optional_string(row.get("crowd_tolerance")),
+        budget_range=_optional_string(row.get("budget_range")),
+        interests=_string_list(row.get("interests")),
+        mobility_needs=_string_list(row.get("mobility_needs")),
+        dietary_needs=_string_list(row.get("dietary_needs")),
+        inclusion_needs=_string_list(row.get("inclusion_needs")),
+        onboarding_completed=_optional_bool(row.get("onboarding_completed")),
     )
 
 
@@ -218,3 +282,7 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _optional_bool(value: object) -> bool:
+    return value if isinstance(value, bool) else False

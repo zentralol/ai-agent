@@ -47,7 +47,7 @@ zentra-agent/
 │   └── schemas/             # Pydantic contracts (immutable, one concern per file)
 │       ├── chat.py          # AgentStreamRequest, ClientType
 │       ├── events.py        # Stream events as a `type`-discriminated union (StreamEvent)
-│       ├── preferences.py   # PreferenceCategory and sanitized UserPreferences
+│       ├── preferences.py   # Sanitized UserPreferences
 │       └── tools.py         # ToolResponse envelope + ToolStatus
 ├── tests/                   # pytest suite (network-free)
 │   ├── test_config.py       # Settings loading, defaults, immutability, caching
@@ -86,8 +86,8 @@ translation.
 ## Preference Lookup
 
 Clients and the Express gateway should not send arbitrary preference snapshots in the
-chat request. The model receives a narrow `get_user_preferences` tool schema and decides
-whether stored preferences are needed for the current answer.
+chat request. The model receives a zero-argument `get_user_preferences` tool and decides
+only whether stored preferences are needed for the current answer.
 
 The agent uses LangChain `create_agent`: every model turn can return text, tool calls,
 or both. LangChain v3 event-stream payloads stay behind the service boundary and are
@@ -98,10 +98,11 @@ limit.
 The tool:
 
 - uses the authenticated `user_id` from the internal request context;
-- lets the model request only narrow categories such as `crowd`, `transport`,
-  `budget`, `accessibility`, `language`, and `interests`;
-- queries Supabase with server-side credentials;
+- does not let the model choose or supply a user id;
+- queries the `onboarding_preferences` table through the Supabase Python SDK with
+  server-side credentials;
 - returns a compact `ToolResponse` payload;
+- returns all sanitized onboarding preference fields when called;
 - treats stored preference text as data, not system instructions.
 
 If Supabase is not configured, chat still works. The preference tool returns a warning and

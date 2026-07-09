@@ -115,7 +115,7 @@ Each tool response should include:
 Initial MCP tools:
 
 1. `get_user_preferences`
-   - Reads only requested preference categories for the authenticated user.
+   - Reads all sanitized onboarding preference fields for the authenticated user.
    - Is defined as a LangChain `@tool`; injected runtime config supplies trusted user context.
    - Uses server-side Supabase credentials for now; user JWT plus RLS should become the preferred read path when gateway auth is wired.
    - Does not accept `user_id` from the model.
@@ -238,13 +238,13 @@ Acceptance criteria:
 
 Deliverables:
 
-- Pydantic schemas for chat stream requests, stream events, tool responses, preference categories, sanitized preference payloads, and internal auth context.
+- Pydantic schemas for chat stream requests, stream events, tool responses, sanitized preference payloads, and internal auth context.
 - OpenAPI docs for `/api/v1/agent/stream`.
 
 Acceptance criteria:
 
 - Request and response schemas can be validated without external services.
-- Schema tests cover missing user context, rejected inline preferences, unsupported client type, selected preference categories, and invalid stream event payloads.
+- Schema tests cover missing user context, rejected inline preferences, unsupported client type, sanitized preference payloads, and invalid stream event payloads.
 
 ### Phase 2: Express Gateway Integration
 

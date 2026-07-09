@@ -14,7 +14,7 @@ from app.schemas.events import (
     StreamEvent,
     ToolFinishedEvent,
 )
-from app.schemas.preferences import PreferenceCategory, UserPreferences, dump_selected_preferences
+from app.schemas.preferences import UserPreferences
 from app.schemas.tools import ToolResponse, ToolStatus
 
 _stream_event_adapter: TypeAdapter[StreamEvent] = TypeAdapter(StreamEvent)
@@ -86,20 +86,28 @@ def test_request_is_immutable() -> None:
         request.user_id = "u2"
 
 
-def test_selected_preferences_only_returns_requested_categories() -> None:
+def test_user_preferences_parse_sanitized_payload() -> None:
     preferences = UserPreferences(
-        crowd_tolerance="low",
-        preferred_transport="walk",
-        language="zh",
+        travel_pace="relaxed",
+        crowd_tolerance="avoid",
+        budget_range="moderate",
         interests=["parks"],
+        mobility_needs=["stepFree"],
+        dietary_needs=["vegetarian"],
+        inclusion_needs=["quietSpaces"],
+        onboarding_completed=True,
     )
 
-    selected = dump_selected_preferences(
-        preferences,
-        (PreferenceCategory.CROWD, PreferenceCategory.LANGUAGE),
-    )
-
-    assert selected == {"crowd_tolerance": "low", "language": "zh"}
+    assert preferences.model_dump(mode="json") == {
+        "travel_pace": "relaxed",
+        "crowd_tolerance": "avoid",
+        "budget_range": "moderate",
+        "interests": ["parks"],
+        "mobility_needs": ["stepFree"],
+        "dietary_needs": ["vegetarian"],
+        "inclusion_needs": ["quietSpaces"],
+        "onboarding_completed": True,
+    }
 
 
 @pytest.mark.parametrize(

@@ -40,7 +40,7 @@ class Settings(BaseSettings):
         default=None, alias="SUPABASE_SERVICE_ROLE_KEY"
     )
     supabase_user_preferences_table: str = Field(
-        default="user_preferences", alias="SUPABASE_USER_PREFERENCES_TABLE"
+        default="onboarding_preferences", alias="SUPABASE_USER_PREFERENCES_TABLE"
     )
     supabase_timeout_seconds: float = Field(
         default=3.0, alias="SUPABASE_TIMEOUT_SECONDS"

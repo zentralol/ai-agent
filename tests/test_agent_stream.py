@@ -24,7 +24,6 @@ import app.tools.preferences as preference_tools
 from app.llm import get_chat_model
 from app.main import app
 from app.schemas.events import EventType
-from app.schemas.preferences import PreferenceCategory
 from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.preferences import GET_USER_PREFERENCES_TOOL_NAME
 
@@ -148,7 +147,7 @@ class _ChunkedToolCallFakeModel(BaseChatModel):
                     tool_call_chunks=[
                         {
                             "name": "",
-                            "args": '{"categories": ',
+                            "args": "{",
                             "id": "",
                             "index": 0,
                             "type": "tool_call_chunk",
@@ -160,7 +159,7 @@ class _ChunkedToolCallFakeModel(BaseChatModel):
                     tool_call_chunks=[
                         {
                             "name": "",
-                            "args": '["crowd"]}',
+                            "args": "}",
                             "id": "",
                             "index": 0,
                             "type": "tool_call_chunk",
@@ -180,21 +179,23 @@ class _ChunkedToolCallFakeModel(BaseChatModel):
 
 class _FakePreferenceTool:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[PreferenceCategory, ...]]] = []
+        self.calls: list[str] = []
 
-    async def get_user_preferences(
-        self, user_id: str, categories: tuple[PreferenceCategory, ...]
-    ) -> ToolResponse:
-        self.calls.append((user_id, categories))
+    async def get_user_preferences(self, user_id: str) -> ToolResponse:
+        self.calls.append(user_id)
         return ToolResponse(
             status=ToolStatus.SUCCESS,
             summary="Loaded user preferences.",
             data={
-                "categories": [category.value for category in categories],
                 "preferences": {
-                    "crowd_tolerance": "low",
-                    "preferred_transport": "walk",
-                    "language": "zh",
+                    "travel_pace": "relaxed",
+                    "crowd_tolerance": "avoid",
+                    "budget_range": "moderate",
+                    "interests": ["parks"],
+                    "mobility_needs": ["stepFree"],
+                    "dietary_needs": [],
+                    "inclusion_needs": ["quietSpaces"],
+                    "onboarding_completed": True,
                 },
                 "source": "test",
             },
@@ -290,7 +291,7 @@ def test_stream_loads_preferences_when_model_requests_tool(
 ) -> None:
     tool_call: dict[str, object] = {
         "name": GET_USER_PREFERENCES_TOOL_NAME,
-        "args": {"categories": ["crowd", "transport"]},
+        "args": {},
         "id": "call-pref",
     }
     model = _FakeModel(
@@ -305,10 +306,7 @@ def test_stream_loads_preferences_when_model_requests_tool(
 
     assert response.status_code == 200
     assert fake_preference_tool.calls
-    user_id, categories = fake_preference_tool.calls[0]
-    assert user_id == "u1"
-    assert PreferenceCategory.CROWD in categories
-    assert PreferenceCategory.TRANSPORT in categories
+    assert fake_preference_tool.calls[0] == "u1"
 
     events = _parse_sse(response.text)
     _assert_sequence(events)
@@ -330,7 +328,7 @@ def test_stream_loads_preferences_when_model_requests_tool(
         message for message in second_call_messages if isinstance(message, ToolMessage)
     ]
     assert tool_messages
-    assert '"crowd_tolerance":"low"' in str(tool_messages[0].content)
+    assert '"crowd_tolerance":"avoid"' in str(tool_messages[0].content)
 
 
 def test_stream_reconstructs_tool_call_streamed_across_multiple_chunks(
@@ -356,8 +354,7 @@ def test_stream_reconstructs_tool_call_streamed_across_multiple_chunks(
     assert "".join(str(e["text"]) for e in deltas) == "Personalized response"
 
     assert fake_preference_tool.calls
-    _, categories = fake_preference_tool.calls[0]
-    assert PreferenceCategory.CROWD in categories
+    assert fake_preference_tool.calls[0] == "u1"
 
 
 def test_stream_does_not_load_preferences_without_model_tool_call(
