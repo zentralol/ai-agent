@@ -1,0 +1,15 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.git
+.github
+.idea
+tests
+docs
+*.md
+.env
+.env.*
+zentra-agent.postman_collection.json

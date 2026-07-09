@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync --frozen --dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy app
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Check Python syntax
+        run: python -m compileall app
+
+  build-image:
+    name: Build image
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.image_tag.outputs.value }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: image_tag
+        run: echo "value=${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=raw,value=${{ steps.image_tag.outputs.value }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  notify-jenkins:
+    name: Notify Jenkins deployment
+    needs: build-image
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Trigger Jenkins deploy
+        env:
+          JENKINS_URL: ${{ secrets.JENKINS_URL || vars.JENKINS_URL }}
+          JENKINS_USER: ${{ secrets.JENKINS_USER || vars.JENKINS_USER }}
+          JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN || vars.JENKINS_TOKEN }}
+          IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
+          GIT_BRANCH: ${{ github.ref_name }}
+          GIT_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          [ -n "${JENKINS_URL}" ] || { echo "JENKINS_URL is not configured"; exit 1; }
+          [ -n "${JENKINS_USER}" ] || { echo "JENKINS_USER is not configured"; exit 1; }
+          [ -n "${JENKINS_API_TOKEN}" ] || { echo "JENKINS_API_TOKEN is not configured"; exit 1; }
+          [ -n "${JENKINS_TOKEN}" ] || { echo "JENKINS_TOKEN is not configured"; exit 1; }
+
+          printf '::add-mask::%s\n' "${JENKINS_API_TOKEN}"
+          printf '::add-mask::%s\n' "${JENKINS_TOKEN}"
+
+          JENKINS_BASE_URL="${JENKINS_URL%/}"
+          case "${JENKINS_BASE_URL}" in
+            */build)
+              JENKINS_BUILD_URL="${JENKINS_BASE_URL%/build}/buildWithParameters"
+              ;;
+            */buildWithParameters)
+              JENKINS_BUILD_URL="${JENKINS_BASE_URL}"
+              ;;
+            */job/ai-agent)
+              JENKINS_BUILD_URL="${JENKINS_BASE_URL}/buildWithParameters"
+              ;;
+            */view/zentra)
+              JENKINS_BUILD_URL="${JENKINS_BASE_URL}/job/ai-agent/buildWithParameters"
+              ;;
+            *)
+              JENKINS_BUILD_URL="${JENKINS_BASE_URL}/view/zentra/job/ai-agent/buildWithParameters"
+              ;;
+          esac
+
+          echo "Triggering Jenkins deployment at ${JENKINS_BUILD_URL}"
+
+          curl --fail --show-error --silent --location --request POST \
+            --user "${JENKINS_USER}:${JENKINS_API_TOKEN}" \
+            "${JENKINS_BUILD_URL}" \
+            --data-urlencode "token=${JENKINS_TOKEN}" \
+            --data-urlencode "IMAGE_NAME=${IMAGE_NAME}" \
+            --data-urlencode "IMAGE_TAG=${IMAGE_TAG}" \
+            --data-urlencode "GIT_COMMIT_SHA=${GIT_COMMIT_SHA}" \
+            --data-urlencode "GIT_BRANCH=${GIT_BRANCH}" \
+            --data-urlencode "cause=GitHub Actions CI passed for ${GITHUB_REPOSITORY}@${GIT_COMMIT_SHA}"
+
+          echo "Triggered Jenkins deployment for ${IMAGE_NAME}:${IMAGE_TAG}"
