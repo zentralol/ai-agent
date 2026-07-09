@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from app.agent.loop import run_agent_loop
+from app.agent.runner import run_agent_stream
 from app.llm import get_chat_model
 from app.schemas.chat import AgentStreamRequest
 from app.schemas.events import DoneEvent, MessageDeltaEvent, StreamEvent, WarningEvent
@@ -35,30 +35,39 @@ FALLBACK_DELTAS = (
 def _encode(event: StreamEvent) -> bytes:
     """Serialize a stream event as a single SSE ``data:`` frame."""
 
-    payload = orjson.dumps(event.model_dump(mode="json"))
+    payload = orjson.dumps(event.model_dump(mode="json", exclude_none=True))
     return b"data: " + payload + b"\n\n"
 
 
-async def _fallback_stream(request: AgentStreamRequest) -> AsyncIterator[bytes]:
+def _with_sequence(event: StreamEvent, sequence: int) -> StreamEvent:
+    """Attach the public sequence number at the API boundary."""
+
+    return event.model_copy(update={"sequence": sequence})
+
+
+async def _fallback_events(request: AgentStreamRequest) -> AsyncIterator[StreamEvent]:
     """Deterministic, dependency-free response used when no LLM is configured."""
 
-    yield _encode(WarningEvent(message="LLM is not configured; using a placeholder reply."))
+    yield WarningEvent(message="LLM is not configured; using a placeholder reply.")
     for text in FALLBACK_DELTAS:
-        yield _encode(MessageDeltaEvent(text=text))
-    yield _encode(DoneEvent(conversation_id=request.conversation_id))
+        yield MessageDeltaEvent(text=text)
+    yield DoneEvent(conversation_id=request.conversation_id)
 
 
 async def _event_stream(
     request: AgentStreamRequest,
     model: BaseChatModel | None,
 ) -> AsyncIterator[bytes]:
-    if model is None:
-        async for frame in _fallback_stream(request):
-            yield frame
-        return
+    sequence = 1
 
-    async for event in run_agent_loop(request, model, AGENT_TOOLS):
-        yield _encode(event)
+    if model is None:
+        event_source = _fallback_events(request)
+    else:
+        event_source = run_agent_stream(request, model, AGENT_TOOLS)
+
+    async for event in event_source:
+        yield _encode(_with_sequence(event, sequence))
+        sequence += 1
 
 
 _ModelDependency = Depends(get_chat_model)

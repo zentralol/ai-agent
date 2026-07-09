@@ -166,6 +166,12 @@ def _parse_sse(body: str) -> list[dict[str, object]]:
     ]
 
 
+def _assert_sequence(events: list[dict[str, object]]) -> None:
+    assert [event.get("sequence") for event in events] == list(
+        range(1, len(events) + 1)
+    )
+
+
 def _valid_payload() -> dict[str, object]:
     return {
         "user_id": "u1",
@@ -189,6 +195,7 @@ def test_stream_llm_direct_answer_becomes_delta(fake_llm: _FakeModel) -> None:
     assert response.headers["content-type"].startswith("text/event-stream")
 
     events = _parse_sse(response.text)
+    _assert_sequence(events)
     deltas = [e for e in events if e["type"] == EventType.MESSAGE_DELTA.value]
     assert "".join(str(e["text"]) for e in deltas) == "Hello there!"
     assert events[-1]["type"] == EventType.DONE.value
@@ -222,12 +229,16 @@ def test_stream_loads_preferences_when_model_requests_tool(
     assert PreferenceCategory.TRANSPORT in categories
 
     events = _parse_sse(response.text)
+    _assert_sequence(events)
     assert events[0] == {
         "type": EventType.TOOL_STARTED.value,
         "tool_name": "get_user_preferences",
+        "tool_call_id": "call-pref",
+        "sequence": 1,
     }
     assert events[1]["type"] == EventType.TOOL_FINISHED.value
     assert events[1]["tool_name"] == "get_user_preferences"
+    assert events[1]["tool_call_id"] == "call-pref"
 
     deltas = [e for e in events if e["type"] == EventType.MESSAGE_DELTA.value]
     assert "".join(str(e["text"]) for e in deltas) == "Personalized response"
@@ -255,6 +266,7 @@ def test_stream_fallback_when_no_llm(no_llm: None) -> None:
 
     assert response.status_code == 200
     events = _parse_sse(response.text)
+    _assert_sequence(events)
     assert events[0]["type"] == EventType.WARNING.value
     assert any(e["type"] == EventType.MESSAGE_DELTA.value for e in events)
     assert events[-1]["type"] == EventType.DONE.value
@@ -265,6 +277,7 @@ def test_stream_error_event_on_llm_failure(failing_llm: None) -> None:
 
     assert response.status_code == 200
     events = _parse_sse(response.text)
+    _assert_sequence(events)
     assert events[-1]["type"] == EventType.ERROR.value
     assert events[-1]["code"] == "LLM_ERROR"
 

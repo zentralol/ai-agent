@@ -37,7 +37,8 @@ zentra-agent/
 │   ├── config.py            # Env-driven, frozen settings (pydantic-settings) + get_settings()
 │   ├── llm.py               # OpenAI-compatible chat model factory (get_chat_model)
 │   ├── agent/
-│   │   └── loop.py          # create_agent runner adapted to Zentra SSE events
+│   │   ├── runner.py        # Runs one create_agent turn and emits StreamEvent objects
+│   │   └── stream_adapter.py # LangChain v3 stream events → Zentra StreamEvent
 │   ├── api/
 │   │   └── agent.py         # POST /api/v1/agent/stream — SSE streaming endpoint
 │   ├── tools/
@@ -60,12 +61,27 @@ zentra-agent/
 └── README.md
 ```
 
-Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `agent/loop` runs a
-LangChain `create_agent` graph and adapts updates to SSE → `tools/catalog` provides the
-LangChain tool list → `tools` owns server-side capabilities → `schemas` define contracts
-→ `config`/`llm` provide
+Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `agent/runner` runs a
+LangChain `create_agent` graph → `agent/stream_adapter` translates LangChain events into
+Zentra stream events → `tools/catalog` provides the LangChain tool list → `tools` owns
+server-side capabilities → `schemas` define contracts → `config`/`llm` provide
 configuration and the model client. Packages for later phases (`adapters` for backend
 clients) will be added when those features land.
+
+### Agent Runner
+
+`agent/runner.py` owns one agent turn. It builds a LangChain agent with:
+
+- `model`: the configured chat model from `llm.py`;
+- `tools`: the server-owned tools from `tools/catalog.py`, converted to a list for
+  LangChain;
+- `system_prompt`: Zentra's travel-assistant behavior and tool-use rules.
+
+The `cast(Any, create_agent(...))` call is only for static typing. LangChain returns a
+compiled graph with a broad runtime surface, and mypy does not reliably infer methods
+such as `astream_events`. The cast does not change runtime behavior; it keeps the
+runner focused on orchestration while `agent/stream_adapter.py` handles event-shape
+translation.
 
 ## Preference Lookup
 
@@ -74,9 +90,10 @@ chat request. The model receives a narrow `get_user_preferences` tool schema and
 whether stored preferences are needed for the current answer.
 
 The agent uses LangChain `create_agent`: every model turn can return text, tool calls,
-or both. LangGraph tool updates are adapted into Zentra's `tool_started` and
-`tool_finished` SSE events, and the graph continues until the model stops requesting tools
-or hits the bounded step limit.
+or both. LangChain v3 event-stream payloads stay behind the service boundary and are
+adapted into Zentra's stable SSE events, including `tool_started` and `tool_finished`.
+The graph continues until the model stops requesting tools or hits the bounded step
+limit.
 
 The tool:
 
@@ -106,6 +123,28 @@ Endpoints:
 - `GET /health` — liveness check.
 - `POST /api/v1/agent/stream` — streams typed chat events as Server-Sent Events.
 
+### Stream Contract
+
+`/api/v1/agent/stream` exposes Zentra events, not raw LangChain events. Every SSE
+`data:` frame contains a JSON object with `type` and a monotonic `sequence` number.
+
+Public event types:
+
+- `message_delta`: assistant text to append. With a streaming provider this is a
+  token/text delta; test models or non-streaming providers may emit a full message
+  in one chunk.
+- `tool_started`: a tool invocation began. Includes `tool_name` and, when available,
+  `tool_call_id`.
+- `tool_finished`: a tool invocation completed. Includes `tool_name`, optional
+  `tool_call_id`, and a normalized `ToolResponse`.
+- `warning`: non-fatal service warning.
+- `done`: successful terminal event. Includes `conversation_id` and optional usage
+  metadata if the provider reports it.
+- `error`: terminal failure event with stable `code` and human-readable `message`.
+
+`metadata` is reserved for optional diagnostics or UI hints. Clients should switch on
+`type` and ignore unknown optional fields.
+
 ### Configure the LLM
 
 Set these in `.env` (OpenAI-compatible provider, e.g. DeepSeek on SenseNova):
@@ -122,8 +161,8 @@ instead of calling a model.
 
 ### Local Testing
 
-Start the service, then send a chat request. The response is an SSE stream: each
-`message_delta` event carries a text chunk, and the stream ends with `done`.
+Start the service, then send a chat request. The response is an SSE stream:
+`message_delta` carries assistant text chunks, and the stream ends with `done`.
 
 1. Start the service (leave running in one terminal):
 

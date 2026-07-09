@@ -7,7 +7,7 @@ event kind without parsing prose.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,9 +29,23 @@ class EventType(StrEnum):
 class _BaseEvent(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    sequence: int | None = Field(
+        default=None,
+        ge=1,
+        description="Monotonic SSE sequence number assigned by the API edge.",
+    )
+    metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional non-contractual metadata for diagnostics or UI hints.",
+    )
+
 
 class MessageDeltaEvent(_BaseEvent):
-    """Incremental chunk of assistant text."""
+    """Incremental chunk of assistant text.
+
+    When the configured model supports streaming this is a token/text delta. Test
+    models and non-streaming providers may emit a complete message in one chunk.
+    """
 
     type: Literal[EventType.MESSAGE_DELTA] = EventType.MESSAGE_DELTA
     text: str = Field(description="Text fragment to append to the response.")
@@ -42,6 +56,10 @@ class ToolStartedEvent(_BaseEvent):
 
     type: Literal[EventType.TOOL_STARTED] = EventType.TOOL_STARTED
     tool_name: str = Field(description="Name of the tool being called.")
+    tool_call_id: str | None = Field(
+        default=None,
+        description="Provider/runtime tool call identifier, when available.",
+    )
 
 
 class ToolFinishedEvent(_BaseEvent):
@@ -49,6 +67,10 @@ class ToolFinishedEvent(_BaseEvent):
 
     type: Literal[EventType.TOOL_FINISHED] = EventType.TOOL_FINISHED
     tool_name: str = Field(description="Name of the tool that finished.")
+    tool_call_id: str | None = Field(
+        default=None,
+        description="Provider/runtime tool call identifier, when available.",
+    )
     result: ToolResponse = Field(description="Structured tool result envelope.")
 
 
@@ -75,6 +97,10 @@ class DoneEvent(_BaseEvent):
     type: Literal[EventType.DONE] = EventType.DONE
     conversation_id: str | None = Field(
         default=None, description="Conversation id associated with this run."
+    )
+    usage: dict[str, Any] | None = Field(
+        default=None,
+        description="Aggregated model usage metadata when the provider reports it.",
     )
 
 
