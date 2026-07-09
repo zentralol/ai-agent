@@ -41,8 +41,8 @@ zentra-agent/
 │   ├── api/
 │   │   └── agent.py         # POST /api/v1/agent/stream — SSE streaming endpoint
 │   ├── tools/
-│   │   ├── registry.py      # Tool schemas + server-side executors
-│   │   └── preferences.py   # Controlled get_user_preferences tool backed by Supabase
+│   │   ├── catalog.py       # AGENT_TOOLS list bound to the model
+│   │   └── preferences.py   # @tool get_user_preferences backed by Supabase
 │   └── schemas/             # Pydantic contracts (immutable, one concern per file)
 │       ├── chat.py          # AgentStreamRequest, ClientType
 │       ├── events.py        # Stream events as a `type`-discriminated union (StreamEvent)
@@ -61,8 +61,8 @@ zentra-agent/
 ```
 
 Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `agent/loop` runs the
-bounded model/tool loop → `tools/registry` exposes tool schemas and executors → `tools`
-owns server-side capabilities → `schemas` define contracts → `config`/`llm` provide
+bounded model/tool loop → `tools/catalog` provides the LangChain tool list → `tools` owns
+server-side capabilities → `schemas` define contracts → `config`/`llm` provide
 configuration and the model client. Packages for later phases (`adapters` for backend
 clients) will be added when those features land.
 

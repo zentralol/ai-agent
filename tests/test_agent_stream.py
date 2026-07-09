@@ -14,15 +14,13 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
+import app.tools.preferences as preference_tools
 from app.llm import get_chat_model
 from app.main import app
 from app.schemas.events import EventType
 from app.schemas.preferences import PreferenceCategory
 from app.schemas.tools import ToolResponse, ToolStatus
-from app.tools.preferences import (
-    GET_USER_PREFERENCES_TOOL_NAME,
-    get_user_preference_tool,
-)
+from app.tools.preferences import GET_USER_PREFERENCES_TOOL_NAME
 
 client = TestClient(app)
 
@@ -35,10 +33,10 @@ class _FakeModel:
         responses: list[AIMessage] | None = None,
     ) -> None:
         self._responses = responses or [AIMessage(content="Hello there!")]
-        self.bound_tools: list[dict[str, object]] | None = None
+        self.bound_tools: list[object] | None = None
         self.messages_by_call: list[list[BaseMessage]] = []
 
-    def bind_tools(self, tools: list[dict[str, Any]]) -> _FakeModel:
+    def bind_tools(self, tools: list[Any]) -> _FakeModel:
         self.bound_tools = tools
         return self
 
@@ -49,7 +47,7 @@ class _FakeModel:
 
 
 class _FailingModel:
-    def bind_tools(self, tools: list[dict[str, Any]]) -> _FailingModel:
+    def bind_tools(self, tools: list[Any]) -> _FailingModel:
         return self
 
     async def ainvoke(self, messages: object) -> AIMessage:
@@ -105,10 +103,10 @@ def failing_llm() -> Iterator[None]:
 
 
 @pytest.fixture
-def fake_preference_tool() -> Iterator[_FakePreferenceTool]:
+def fake_preference_tool(monkeypatch: pytest.MonkeyPatch) -> _FakePreferenceTool:
     tool = _FakePreferenceTool()
-    with _dependency_override(get_user_preference_tool, tool):
-        yield tool
+    monkeypatch.setattr(preference_tools, "get_user_preference_tool", lambda: tool)
+    return tool
 
 
 @contextmanager

@@ -19,8 +19,7 @@ from app.agent.loop import run_agent_loop
 from app.llm import get_chat_model
 from app.schemas.chat import AgentStreamRequest
 from app.schemas.events import DoneEvent, MessageDeltaEvent, StreamEvent, WarningEvent
-from app.tools.preferences import UserPreferenceTool, get_user_preference_tool
-from app.tools.registry import build_tool_registry
+from app.tools.catalog import AGENT_TOOLS
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
@@ -52,30 +51,26 @@ async def _fallback_stream(request: AgentStreamRequest) -> AsyncIterator[bytes]:
 async def _event_stream(
     request: AgentStreamRequest,
     model: BaseChatModel | None,
-    preference_tool: UserPreferenceTool,
 ) -> AsyncIterator[bytes]:
     if model is None:
         async for frame in _fallback_stream(request):
             yield frame
         return
 
-    registry = build_tool_registry(preference_tool)
-    async for event in run_agent_loop(request, model, registry):
+    async for event in run_agent_loop(request, model, AGENT_TOOLS):
         yield _encode(event)
 
 
 _ModelDependency = Depends(get_chat_model)
-_PreferenceToolDependency = Depends(get_user_preference_tool)
 
 
 @router.post("/stream")
 async def agent_stream(
     request: AgentStreamRequest,
     model: BaseChatModel | None = _ModelDependency,
-    preference_tool: UserPreferenceTool = _PreferenceToolDependency,
 ) -> StreamingResponse:
     """Stream typed chat events for a single user message."""
 
     return StreamingResponse(
-        _event_stream(request, model, preference_tool), media_type=SSE_MEDIA_TYPE
+        _event_stream(request, model), media_type=SSE_MEDIA_TYPE
     )

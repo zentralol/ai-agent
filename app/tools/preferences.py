@@ -1,9 +1,4 @@
-"""Controlled user preference lookup tool.
-
-The model never supplies a user id to this tool. The agent passes the
-authenticated user id from the request context and only allows the model or
-router to request narrow preference categories.
-"""
+"""Controlled user preference lookup tool."""
 
 from __future__ import annotations
 
@@ -13,6 +8,8 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 
 from app.config import Settings, get_settings
 from app.schemas.preferences import (
@@ -24,36 +21,6 @@ from app.schemas.tools import ToolResponse, ToolStatus
 
 GET_USER_PREFERENCES_TOOL_NAME = "get_user_preferences"
 
-GET_USER_PREFERENCES_TOOL_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": GET_USER_PREFERENCES_TOOL_NAME,
-        "description": (
-            "Load compact, sanitized user preference data when it would materially "
-            "improve personalization. Do not request or provide a user_id; the "
-            "server uses authenticated request context."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "categories": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": [category.value for category in PreferenceCategory],
-                    },
-                    "description": (
-                        "Preference categories needed for the current response. "
-                        "Request the minimum useful set."
-                    ),
-                }
-            },
-            "required": ["categories"],
-            "additionalProperties": False,
-        },
-    },
-}
-
 
 def parse_preference_categories(value: object) -> tuple[PreferenceCategory, ...]:
     """Parse model-requested category strings into the allowed enum set."""
@@ -63,6 +30,9 @@ def parse_preference_categories(value: object) -> tuple[PreferenceCategory, ...]
 
     parsed: list[PreferenceCategory] = []
     for item in value:
+        if isinstance(item, PreferenceCategory):
+            parsed.append(item)
+            continue
         if not isinstance(item, str):
             continue
         try:
@@ -70,6 +40,30 @@ def parse_preference_categories(value: object) -> tuple[PreferenceCategory, ...]
         except ValueError:
             continue
     return _dedupe_categories(parsed)
+
+
+@tool
+async def get_user_preferences(
+    categories: list[PreferenceCategory],
+    config: RunnableConfig,
+) -> str:
+    """Load compact, sanitized user preferences when personalization is needed."""
+
+    user_id = _configurable_string(config, "user_id")
+    if user_id is None:
+        return _tool_response_content(
+            ToolResponse(
+                status=ToolStatus.ERROR,
+                summary="User preferences cannot be loaded without authenticated user context.",
+                next_actions=["Continue without stored preferences for this response."],
+            )
+        )
+
+    result = await get_user_preference_tool().get_user_preferences(
+        user_id=user_id,
+        categories=parse_preference_categories(categories),
+    )
+    return _tool_response_content(result)
 
 
 class UserPreferenceTool:
@@ -174,6 +168,19 @@ def get_user_preference_tool() -> UserPreferenceTool:
     """Return the cached server-side preference lookup tool."""
 
     return UserPreferenceTool(get_settings())
+
+
+def _configurable_string(config: RunnableConfig, key: str) -> str | None:
+    configurable = config.get("configurable", {})
+    value = configurable.get(key)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _tool_response_content(result: ToolResponse) -> str:
+    return result.model_dump_json()
 
 
 def _dedupe_categories(

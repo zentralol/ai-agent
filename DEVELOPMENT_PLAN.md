@@ -116,7 +116,8 @@ Initial MCP tools:
 
 1. `get_user_preferences`
    - Reads only requested preference categories for the authenticated user.
-   - Uses Supabase service credentials inside the agent service.
+   - Is defined as a LangChain `@tool`; injected runtime config supplies trusted user context.
+   - Uses server-side Supabase credentials for now; user JWT plus RLS should become the preferred read path when gateway auth is wired.
    - Does not accept `user_id` from the model.
    - Returns compact preference data, never a full user record.
 

@@ -10,6 +10,8 @@ import orjson
 import structlog
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
 
 from app.schemas.chat import AgentStreamRequest
 from app.schemas.events import (
@@ -21,7 +23,6 @@ from app.schemas.events import (
     ToolStartedEvent,
 )
 from app.schemas.tools import ToolResponse, ToolStatus
-from app.tools.registry import ToolContext, ToolRegistry, tool_schemas
 
 logger = structlog.get_logger(__name__)
 
@@ -49,7 +50,7 @@ class ModelToolCall:
 async def run_agent_loop(
     request: AgentStreamRequest,
     model: BaseChatModel,
-    registry: ToolRegistry,
+    tools: tuple[BaseTool, ...],
     max_tool_steps: int = MAX_TOOL_STEPS,
 ) -> AsyncIterator[StreamEvent]:
     """Run the model/tool loop until the model stops requesting tools."""
@@ -58,12 +59,9 @@ async def run_agent_loop(
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=request.message),
     ]
-    context = ToolContext(
-        user_id=request.user_id,
-        request_id=request.request_id,
-        conversation_id=request.conversation_id,
-    )
-    model_with_tools = _bind_tools(model, tool_schemas(registry))
+    tool_config = _tool_config(request)
+    tools_by_name = {tool.name: tool for tool in tools}
+    model_with_tools = _bind_tools(model, tools)
 
     for step in range(max_tool_steps):
         try:
@@ -89,7 +87,7 @@ async def run_agent_loop(
 
         for tool_call in tool_calls:
             yield ToolStartedEvent(tool_name=tool_call.name)
-            result = await _execute_tool_call(context, registry, tool_call)
+            result = await _execute_tool_call(tool_config, tools_by_name, tool_call)
             yield ToolFinishedEvent(tool_name=tool_call.name, result=result)
             messages.append(
                 ToolMessage(
@@ -109,10 +107,22 @@ async def run_agent_loop(
     )
 
 
-def _bind_tools(model: BaseChatModel, schemas: list[dict[str, Any]]) -> Any:
+def _tool_config(request: AgentStreamRequest) -> RunnableConfig:
+    """Build runtime config injected into LangChain tools."""
+
+    return {
+        "configurable": {
+            "user_id": request.user_id,
+            "request_id": request.request_id,
+            "conversation_id": request.conversation_id,
+        }
+    }
+
+
+def _bind_tools(model: BaseChatModel, tools: tuple[BaseTool, ...]) -> Any:
     """Bind all registered tools to the model."""
 
-    return cast(Any, model).bind_tools(schemas)
+    return cast(Any, model).bind_tools(list(tools))
 
 
 async def _invoke_model(model_with_tools: Any, messages: list[BaseMessage]) -> BaseMessage:
@@ -215,11 +225,11 @@ def _decode_tool_arguments(raw_arguments: object) -> Mapping[str, object]:
 
 
 async def _execute_tool_call(
-    context: ToolContext,
-    registry: ToolRegistry,
+    config: RunnableConfig,
+    tools_by_name: Mapping[str, BaseTool],
     tool_call: ModelToolCall,
 ) -> ToolResponse:
-    tool = registry.get(tool_call.name)
+    tool = tools_by_name.get(tool_call.name)
     if tool is None:
         return ToolResponse(
             status=ToolStatus.ERROR,
@@ -229,7 +239,7 @@ async def _execute_tool_call(
         )
 
     try:
-        return await tool.execute(context, tool_call.args)
+        raw_result = await tool.ainvoke(dict(tool_call.args), config=config)
     except Exception:
         logger.exception("agent_tool_failed", tool_name=tool_call.name)
         return ToolResponse(
@@ -239,7 +249,37 @@ async def _execute_tool_call(
             next_actions=["Continue without this tool result or ask a clarifying question."],
         )
 
+    return _coerce_tool_response(raw_result, tool_call.name)
+
+
+def _coerce_tool_response(raw_result: object, tool_name: str) -> ToolResponse:
+    if isinstance(raw_result, ToolResponse):
+        return raw_result
+    if isinstance(raw_result, str):
+        try:
+            return ToolResponse.model_validate_json(raw_result)
+        except ValueError:
+            return ToolResponse(
+                status=ToolStatus.SUCCESS,
+                summary=f"Tool returned text: {tool_name}.",
+                data={"content": raw_result},
+            )
+    if isinstance(raw_result, Mapping):
+        try:
+            return ToolResponse.model_validate(raw_result)
+        except ValueError:
+            return ToolResponse(
+                status=ToolStatus.SUCCESS,
+                summary=f"Tool returned structured data: {tool_name}.",
+                data=dict(raw_result),
+            )
+
+    return ToolResponse(
+        status=ToolStatus.SUCCESS,
+        summary=f"Tool returned a result: {tool_name}.",
+        data={"content": str(raw_result)},
+    )
+
 
 def _tool_result_content(result: ToolResponse) -> str:
     return orjson.dumps(result.model_dump(mode="json")).decode("utf-8")
-
