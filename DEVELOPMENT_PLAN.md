@@ -51,7 +51,7 @@ Responsibilities of Express:
 Responsibilities of `zentra-agent`:
 
 - Run the AI conversation graph.
-- Load user preferences lazily through a controlled `get_user_preferences` tool when personalization is needed.
+- Let the model request user preferences lazily through a controlled `get_user_preferences` tool when personalization is needed.
 - Decide when backend capabilities are needed.
 - Call backend-owned capabilities through narrow tools.
 - Validate tool inputs and outputs.
@@ -157,14 +157,14 @@ Initial graph:
 
 3. `load_context`
    - Load prior agent state only if a conversation ID is provided.
-   - For planning, recommendation, route, itinerary, or explicit personalization requests, load compact preference data through `get_user_preferences`.
+   - Expose the `get_user_preferences` schema so the model can decide whether compact preference data is needed.
    - Cache loaded preferences inside the current agent run so repeated nodes do not re-query Supabase.
 
 4. `maybe_clarify`
    - Ask a concise follow-up question if required facts are missing and cannot be safely defaulted.
 
 5. `select_tools`
-   - Choose backend capability tools based on the user intent.
+   - Let the model choose backend capability tools based on the user intent and available tool schemas.
 
 6. `call_tools`
    - Call preference, prediction, forecast, recommendation, backend route, or backend itinerary tools.
@@ -254,7 +254,7 @@ Acceptance criteria:
 - Agent rejects unauthenticated direct calls.
 - Agent accepts calls with valid internal auth.
 - Express can pass authenticated `userId`, request ID, client type, and conversation ID.
-- Agent can lazily load user preferences through `get_user_preferences` without trusting model-supplied identity.
+- Agent can lazily load user preferences through model-requested `get_user_preferences` calls without trusting model-supplied identity.
 
 ### Phase 3: MCP Tool Layer
 

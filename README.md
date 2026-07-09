@@ -64,13 +64,13 @@ configuration and the model client. Packages for later phases (`agent` for LangG
 ## Preference Lookup
 
 Clients and the Express gateway should not send arbitrary preference snapshots in the
-chat request. The agent loads preferences only when they are relevant through the
-controlled `get_user_preferences` tool.
+chat request. The model receives a narrow `get_user_preferences` tool schema and decides
+whether stored preferences are needed for the current answer.
 
 The tool:
 
 - uses the authenticated `user_id` from the internal request context;
-- lets the model/router request only narrow categories such as `crowd`, `transport`,
+- lets the model request only narrow categories such as `crowd`, `transport`,
   `budget`, `accessibility`, `language`, and `interests`;
 - queries Supabase with server-side credentials;
 - returns a compact `ToolResponse` payload;
@@ -138,8 +138,8 @@ curl -N -X POST localhost:8010/api/v1/agent/stream \
       }'
 ```
 
-4. With a conversation id. For planning/recommendation requests, the agent will load
-   relevant preferences through `get_user_preferences` when Supabase is configured:
+4. With a conversation id. The model can call `get_user_preferences` when the answer
+   needs stored preference context and Supabase is configured:
 
 ```bash
 curl -N -X POST localhost:8010/api/v1/agent/stream \

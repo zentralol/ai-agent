@@ -22,46 +22,54 @@ from app.schemas.preferences import (
 )
 from app.schemas.tools import ToolResponse, ToolStatus
 
-PLANNING_PREFERENCE_CATEGORIES: tuple[PreferenceCategory, ...] = (
-    PreferenceCategory.TRAVEL_STYLE,
-    PreferenceCategory.CROWD,
-    PreferenceCategory.TRANSPORT,
-    PreferenceCategory.BUDGET,
-    PreferenceCategory.ACCESSIBILITY,
-    PreferenceCategory.LANGUAGE,
-    PreferenceCategory.INTERESTS,
-)
+GET_USER_PREFERENCES_TOOL_NAME = "get_user_preferences"
 
-_PLANNING_KEYWORDS = (
-    "route",
-    "itinerary",
-    "plan",
-    "recommend",
-    "recommendation",
-    "quiet",
-    "crowd",
-    "busy",
-    "路线",
-    "行程",
-    "规划",
-    "计划",
-    "推荐",
-    "安静",
-    "人少",
-    "拥挤",
-    "避开",
-    "偏好",
-    "喜欢",
-)
+GET_USER_PREFERENCES_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": GET_USER_PREFERENCES_TOOL_NAME,
+        "description": (
+            "Load compact, sanitized user preference data when it would materially "
+            "improve personalization. Do not request or provide a user_id; the "
+            "server uses authenticated request context."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [category.value for category in PreferenceCategory],
+                    },
+                    "description": (
+                        "Preference categories needed for the current response. "
+                        "Request the minimum useful set."
+                    ),
+                }
+            },
+            "required": ["categories"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
-def infer_preference_categories(message: str) -> tuple[PreferenceCategory, ...]:
-    """Return preference categories worth loading for the user message."""
+def parse_preference_categories(value: object) -> tuple[PreferenceCategory, ...]:
+    """Parse model-requested category strings into the allowed enum set."""
 
-    normalized = message.casefold()
-    if any(keyword in normalized for keyword in _PLANNING_KEYWORDS):
-        return PLANNING_PREFERENCE_CATEGORIES
-    return ()
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes):
+        return ()
+
+    parsed: list[PreferenceCategory] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        try:
+            parsed.append(PreferenceCategory(item))
+        except ValueError:
+            continue
+    return _dedupe_categories(parsed)
 
 
 class UserPreferenceTool:

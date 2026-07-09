@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
-from typing import cast
+from typing import Any, cast
 
 import orjson
 import pytest
@@ -19,7 +19,10 @@ from app.main import app
 from app.schemas.events import EventType
 from app.schemas.preferences import PreferenceCategory
 from app.schemas.tools import ToolResponse, ToolStatus
-from app.tools.preferences import get_user_preference_tool
+from app.tools.preferences import (
+    GET_USER_PREFERENCES_TOOL_NAME,
+    get_user_preference_tool,
+)
 
 client = TestClient(app)
 
@@ -29,20 +32,56 @@ class _FakeChunk:
         self.content = content
 
 
+class _FakeDecision:
+    def __init__(
+        self,
+        content: str,
+        tool_calls: list[dict[str, object]] | None = None,
+    ) -> None:
+        self.content = content
+        self.tool_calls = tool_calls or []
+
+
 class _FakeModel:
     """Minimal stand-in for a LangChain chat model."""
 
-    def __init__(self, chunks: list[str]) -> None:
+    def __init__(
+        self,
+        chunks: list[str],
+        decision_content: str = "Hello there!",
+        tool_calls: list[dict[str, object]] | None = None,
+    ) -> None:
         self._chunks = chunks
-        self.messages: list[BaseMessage] | None = None
+        self._decision_content = decision_content
+        self._tool_calls = tool_calls or []
+        self.bound_tools: list[dict[str, object]] | None = None
+        self.decision_messages: list[BaseMessage] | None = None
+        self.stream_messages: list[BaseMessage] | None = None
+
+    def bind_tools(self, tools: list[dict[str, Any]]) -> _FakeModel:
+        self.bound_tools = tools
+        return self
+
+    async def ainvoke(self, messages: object) -> _FakeDecision:
+        self.decision_messages = cast(list[BaseMessage], messages)
+        return _FakeDecision(
+            content=self._decision_content,
+            tool_calls=self._tool_calls,
+        )
 
     async def astream(self, messages: object) -> AsyncIterator[_FakeChunk]:
-        self.messages = cast(list[BaseMessage], messages)
+        self.stream_messages = cast(list[BaseMessage], messages)
         for text in self._chunks:
             yield _FakeChunk(text)
 
 
 class _FailingModel:
+    def bind_tools(self, tools: list[dict[str, Any]]) -> _FailingModel:
+        return self
+
+    async def ainvoke(self, messages: object) -> _FakeDecision:
+        raise RuntimeError("boom")
+
     async def astream(self, messages: object) -> AsyncIterator[_FakeChunk]:
         raise RuntimeError("boom")
         yield _FakeChunk("")  # pragma: no cover - unreachable, makes this an async gen
@@ -81,7 +120,7 @@ def _override_model(model: object) -> Iterator[None]:
 
 @pytest.fixture
 def fake_llm() -> Iterator[_FakeModel]:
-    model = _FakeModel(["Hello", " there", "!"])
+    model = _FakeModel(["unused"])
     with _dependency_override(get_chat_model, model):
         yield model
 
@@ -138,7 +177,7 @@ def test_health_ok() -> None:
     assert response.json() == {"status": "ok", "service": "zentra-agent"}
 
 
-def test_stream_llm_tokens_become_deltas(fake_llm: _FakeModel) -> None:
+def test_stream_llm_direct_answer_becomes_delta(fake_llm: _FakeModel) -> None:
     response = client.post("/api/v1/agent/stream", json=_valid_payload())
 
     assert response.status_code == 200
@@ -149,15 +188,20 @@ def test_stream_llm_tokens_become_deltas(fake_llm: _FakeModel) -> None:
     assert "".join(str(e["text"]) for e in deltas) == "Hello there!"
     assert events[-1]["type"] == EventType.DONE.value
     assert events[-1]["conversation_id"] == "conv-9"
+    assert fake_llm.bound_tools is not None
 
 
-def test_stream_loads_preferences_for_planning_request(
-    fake_llm: _FakeModel, fake_preference_tool: _FakePreferenceTool
+def test_stream_loads_preferences_when_model_requests_tool(
+    fake_preference_tool: _FakePreferenceTool,
 ) -> None:
-    payload = _valid_payload()
-    payload["message"] = "帮我规划一条人少的路线"
+    tool_call: dict[str, object] = {
+        "name": GET_USER_PREFERENCES_TOOL_NAME,
+        "args": {"categories": ["crowd", "transport"]},
+    }
+    model = _FakeModel(["Personalized", " response"], tool_calls=[tool_call])
 
-    response = client.post("/api/v1/agent/stream", json=payload)
+    with _dependency_override(get_chat_model, model):
+        response = client.post("/api/v1/agent/stream", json=_valid_payload())
 
     assert response.status_code == 200
     assert fake_preference_tool.calls
@@ -174,13 +218,16 @@ def test_stream_loads_preferences_for_planning_request(
     assert events[1]["type"] == EventType.TOOL_FINISHED.value
     assert events[1]["tool_name"] == "get_user_preferences"
 
-    assert fake_llm.messages is not None
-    system_message = fake_llm.messages[0]
+    deltas = [e for e in events if e["type"] == EventType.MESSAGE_DELTA.value]
+    assert "".join(str(e["text"]) for e in deltas) == "Personalized response"
+
+    assert model.stream_messages is not None
+    system_message = model.stream_messages[0]
     assert "Controlled user preference data" in str(system_message.content)
     assert '"crowd_tolerance":"low"' in str(system_message.content)
 
 
-def test_stream_does_not_load_preferences_for_plain_chat(
+def test_stream_does_not_load_preferences_without_model_tool_call(
     fake_llm: _FakeModel, fake_preference_tool: _FakePreferenceTool
 ) -> None:
     response = client.post("/api/v1/agent/stream", json=_valid_payload())

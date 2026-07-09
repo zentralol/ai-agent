@@ -7,7 +7,11 @@ import pytest
 from app.config import Settings
 from app.schemas.preferences import PreferenceCategory
 from app.schemas.tools import ToolStatus
-from app.tools.preferences import UserPreferenceTool, infer_preference_categories
+from app.tools.preferences import (
+    GET_USER_PREFERENCES_TOOL_SCHEMA,
+    UserPreferenceTool,
+    parse_preference_categories,
+)
 
 
 class _FakeRowPreferenceTool(UserPreferenceTool):
@@ -23,15 +27,22 @@ class _FakeRowPreferenceTool(UserPreferenceTool):
         }
 
 
-def test_infers_preference_categories_for_planning_message() -> None:
-    categories = infer_preference_categories("帮我规划一条人少的路线")
+def test_tool_schema_does_not_accept_model_supplied_user_id() -> None:
+    function = GET_USER_PREFERENCES_TOOL_SCHEMA["function"]
+    assert isinstance(function, dict)
+    parameters = function["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
 
-    assert PreferenceCategory.CROWD in categories
-    assert PreferenceCategory.TRANSPORT in categories
+    assert "categories" in properties
+    assert "user_id" not in properties
 
 
-def test_does_not_infer_preferences_for_plain_chat() -> None:
-    assert infer_preference_categories("hello") == ()
+def test_parse_preference_categories_keeps_only_allowed_values() -> None:
+    categories = parse_preference_categories(["crowd", "bad-value", "transport", 123])
+
+    assert categories == (PreferenceCategory.CROWD, PreferenceCategory.TRANSPORT)
 
 
 @pytest.mark.asyncio
