@@ -5,7 +5,7 @@ The chat model dependency is overridden with fakes so tests never hit a network.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
 
@@ -13,9 +13,10 @@ import orjson
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-from langchain_core.outputs import ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.tools import BaseTool
 from pydantic import Field
 
@@ -92,6 +93,91 @@ class _FailingModel(FakeMessagesListChatModel):
         raise RuntimeError("boom")
 
 
+class _ChunkedToolCallFakeModel(BaseChatModel):
+    """Streams one tool call across multiple chunks the way SenseNova/DeepSeek do:
+    only the first chunk carries the tool name and id, continuation chunks carry
+    only argument fragments. Regression coverage for the message corruption that
+    LangGraph's experimental v3 astream_events protocol used to introduce when
+    reconstructing such chunked tool calls (see runner.py's version note).
+    """
+
+    call_count: int = 0
+
+    def bind_tools(
+        self,
+        tools: Sequence[_ToolDefinition],
+        *,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> _ChunkedToolCallFakeModel:
+        return self
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        raise NotImplementedError("this fake model only supports streaming")
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        self.call_count += 1
+        if self.call_count == 1:
+            chunks = [
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": GET_USER_PREFERENCES_TOOL_NAME,
+                            "args": "",
+                            "id": "call-chunked",
+                            "index": 0,
+                            "type": "tool_call_chunk",
+                        }
+                    ],
+                ),
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": "",
+                            "args": '{"categories": ',
+                            "id": "",
+                            "index": 0,
+                            "type": "tool_call_chunk",
+                        }
+                    ],
+                ),
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": "",
+                            "args": '["crowd"]}',
+                            "id": "",
+                            "index": 0,
+                            "type": "tool_call_chunk",
+                        }
+                    ],
+                ),
+            ]
+        else:
+            chunks = [AIMessageChunk(content="Personalized response")]
+        for chunk in chunks:
+            yield ChatGenerationChunk(message=chunk)
+
+    @property
+    def _llm_type(self) -> str:
+        return "chunked-tool-call-fake"
+
+
 class _FakePreferenceTool:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[PreferenceCategory, ...]]] = []
@@ -148,9 +234,7 @@ def fake_preference_tool(monkeypatch: pytest.MonkeyPatch) -> _FakePreferenceTool
 
 
 @contextmanager
-def _dependency_override(
-    dependency: Callable[..., object], value: object
-) -> Iterator[None]:
+def _dependency_override(dependency: Callable[..., object], value: object) -> Iterator[None]:
     app.dependency_overrides[dependency] = lambda: value
     try:
         yield
@@ -167,9 +251,7 @@ def _parse_sse(body: str) -> list[dict[str, object]]:
 
 
 def _assert_sequence(events: list[dict[str, object]]) -> None:
-    assert [event.get("sequence") for event in events] == list(
-        range(1, len(events) + 1)
-    )
+    assert [event.get("sequence") for event in events] == list(range(1, len(events) + 1))
 
 
 def _valid_payload() -> dict[str, object]:
@@ -233,7 +315,6 @@ def test_stream_loads_preferences_when_model_requests_tool(
     assert events[0] == {
         "type": EventType.TOOL_STARTED.value,
         "tool_name": "get_user_preferences",
-        "tool_call_id": "call-pref",
         "sequence": 1,
     }
     assert events[1]["type"] == EventType.TOOL_FINISHED.value
@@ -250,6 +331,33 @@ def test_stream_loads_preferences_when_model_requests_tool(
     ]
     assert tool_messages
     assert '"crowd_tolerance":"low"' in str(tool_messages[0].content)
+
+
+def test_stream_reconstructs_tool_call_streamed_across_multiple_chunks(
+    fake_preference_tool: _FakePreferenceTool,
+) -> None:
+    model = _ChunkedToolCallFakeModel()
+
+    with _dependency_override(get_chat_model, model):
+        response = client.post("/api/v1/agent/stream", json=_valid_payload())
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    _assert_sequence(events)
+
+    assert events[0]["type"] == EventType.TOOL_STARTED.value
+    assert events[0]["tool_name"] == "get_user_preferences"
+
+    assert events[1]["type"] == EventType.TOOL_FINISHED.value
+    assert events[1]["tool_name"] == "get_user_preferences"
+    assert events[1]["tool_call_id"] == "call-chunked"
+
+    deltas = [e for e in events if e["type"] == EventType.MESSAGE_DELTA.value]
+    assert "".join(str(e["text"]) for e in deltas) == "Personalized response"
+
+    assert fake_preference_tool.calls
+    _, categories = fake_preference_tool.calls[0]
+    assert PreferenceCategory.CROWD in categories
 
 
 def test_stream_does_not_load_preferences_without_model_tool_call(

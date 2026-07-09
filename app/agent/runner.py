@@ -46,10 +46,13 @@ async def run_agent_stream(
     adapter = LangChainStreamAdapter()
 
     try:
-        stream = await agent.astream_events(
+        # v2, not the newer v3: v3 is explicitly experimental in LangGraph and was
+        # found to corrupt streamed tool calls (name/id came back empty) when
+        # reconstructing messages from chunks.
+        stream = agent.astream_events(
             {"messages": [HumanMessage(content=request.message)]},
             config=_tool_config(request, max_tool_steps),
-            version="v3",
+            version="v2",
         )
         async for raw_event in stream:
             for event in adapter.to_zentra_events(raw_event):

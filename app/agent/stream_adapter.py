@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from langchain_core.messages import (
+    AIMessage,
     BaseMessage,
     BaseMessageChunk,
     ToolMessage,
@@ -21,153 +22,140 @@ from app.schemas.tools import ToolResponse, ToolStatus
 
 
 class LangChainStreamAdapter:
-    """Stateful adapter from LangChain v3 stream events to Zentra events."""
+    """Stateful adapter from LangChain's stable v2 event stream to Zentra events.
+
+    v2 is used deliberately over the newer v3 protocol: v3 is explicitly marked
+    experimental by LangGraph and was found to corrupt streamed tool calls (name
+    and id come back as empty strings) when reconstructing messages from chunks.
+    """
 
     def __init__(self) -> None:
-        self._tool_names_by_call_id: dict[str, str] = {}
-        self._usage_by_message_id: dict[str, dict[str, Any]] = {}
+        self._usage_by_run_id: dict[str, dict[str, Any]] = {}
+        self._streamed_text_run_ids: set[str] = set()
 
     @property
     def usage(self) -> dict[str, Any] | None:
-        """Aggregated model usage metadata reported by streamed messages."""
+        """Aggregated model usage metadata reported by completed model runs."""
 
-        return _combine_usage_metadata(self._usage_by_message_id)
+        return _combine_usage_metadata(self._usage_by_run_id)
 
     def to_zentra_events(self, raw_event: object) -> list[StreamEvent]:
-        """Map one raw LangChain v3 event-stream payload to public events."""
+        """Map one raw LangChain v2 event-stream payload to public events."""
 
-        self._record_usage_metadata(raw_event)
-
-        method = _event_method(raw_event)
-        if method == "messages":
-            return _message_events_from_data(_event_data(raw_event))
-        if method == "tools":
-            return self._tool_events_from_data(_event_data(raw_event))
-        return []
-
-    def _tool_events_from_data(self, data: object) -> list[StreamEvent]:
-        if not isinstance(data, Mapping):
+        if not isinstance(raw_event, Mapping):
             return []
 
-        event = data.get("event")
-        tool_call_id = _optional_string(data.get("tool_call_id"))
-
-        if event == "tool-started":
-            tool_name = _optional_string(data.get("tool_name")) or "unknown_tool"
-            self._remember_tool_name(tool_call_id, tool_name)
-            return [
-                ToolStartedEvent(tool_name=tool_name, tool_call_id=tool_call_id),
-            ]
-
-        if event == "tool-finished":
-            output = data.get("output")
-            tool_name = self._tool_name_for_finished_event(data, output, tool_call_id)
-            self._remember_tool_name(tool_call_id, tool_name)
-            return [
-                ToolFinishedEvent(
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    result=_coerce_tool_response(
-                        _tool_output_content(output), tool_name
-                    ),
-                )
-            ]
-
-        if event == "tool-error":
-            tool_name = self._known_tool_name(tool_call_id) or "unknown_tool"
-            message = _optional_string(data.get("message")) or f"Tool failed: {tool_name}."
-            return [
-                ToolFinishedEvent(
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    result=ToolResponse(
-                        status=ToolStatus.ERROR,
-                        summary=message,
-                        next_actions=[
-                            "Continue without this tool result or try again."
-                        ],
-                    ),
-                )
-            ]
-
+        event_name = raw_event.get("event")
+        if event_name == "on_chat_model_stream":
+            return self._handle_message_stream(raw_event)
+        if event_name == "on_chat_model_end":
+            return self._handle_message_end(raw_event)
+        if event_name == "on_tool_start":
+            return _tool_started_events(raw_event)
+        if event_name == "on_tool_end":
+            return _tool_finished_events(raw_event)
+        if event_name == "on_tool_error":
+            return _tool_error_events(raw_event)
         return []
 
-    def _tool_name_for_finished_event(
-        self,
-        data: Mapping[object, object],
-        output: object,
-        tool_call_id: str | None,
-    ) -> str:
-        return (
-            _optional_string(data.get("tool_name"))
-            or _tool_message_name(output)
-            or self._known_tool_name(tool_call_id)
-            or "unknown_tool"
-        )
+    def _handle_message_stream(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
+        events = _message_events(raw_event)
+        if events:
+            run_id = _optional_string(raw_event.get("run_id"))
+            if run_id is not None:
+                self._streamed_text_run_ids.add(run_id)
+        return events
 
-    def _remember_tool_name(self, tool_call_id: str | None, tool_name: str) -> None:
-        if tool_call_id is not None:
-            self._tool_names_by_call_id[tool_call_id] = tool_name
+    def _handle_message_end(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
+        """Handle a completed model run: record usage and, for models that never
+        emitted token-level chunks (test doubles, non-streaming providers), emit
+        the full response as a single fallback delta.
+        """
 
-    def _known_tool_name(self, tool_call_id: str | None) -> str | None:
-        if tool_call_id is None:
-            return None
-        return self._tool_names_by_call_id.get(tool_call_id)
+        data = _event_data(raw_event)
+        output = data.get("output") if isinstance(data, Mapping) else None
+        if not isinstance(output, AIMessage):
+            return []
 
-    def _record_usage_metadata(self, raw_event: object) -> None:
-        if _event_method(raw_event) != "messages":
+        self._record_usage(raw_event, output)
+
+        run_id = _optional_string(raw_event.get("run_id"))
+        if run_id is not None and run_id in self._streamed_text_run_ids:
+            return []
+
+        text = _message_text(output)
+        if not text:
+            return []
+        return [MessageDeltaEvent(text=text)]
+
+    def _record_usage(self, raw_event: Mapping[object, object], output: AIMessage) -> None:
+        usage = output.usage_metadata
+        if not usage:
             return
 
-        message = _message_from_data(_event_data(raw_event))
-        if message is None:
-            return
-
-        usage = getattr(message, "usage_metadata", None)
-        if not isinstance(usage, Mapping) or not usage:
-            return
-
-        message_id = _optional_string(getattr(message, "id", None)) or str(
-            len(self._usage_by_message_id)
-        )
-        self._usage_by_message_id[message_id] = dict(usage)
+        run_id = _optional_string(raw_event.get("run_id")) or str(len(self._usage_by_run_id))
+        self._usage_by_run_id[run_id] = dict(usage)
 
 
-def _event_method(raw_event: object) -> str | None:
-    if not isinstance(raw_event, Mapping):
-        return None
-    method = raw_event.get("method")
-    if not isinstance(method, str):
-        return None
-    return method
+def _event_data(raw_event: Mapping[object, object]) -> object:
+    return raw_event.get("data")
 
 
-def _event_data(raw_event: object) -> object:
-    if not isinstance(raw_event, Mapping):
-        return None
-    params = raw_event.get("params")
-    if not isinstance(params, Mapping):
-        return None
-    return params.get("data")
-
-
-def _message_events_from_data(data: object) -> list[StreamEvent]:
-    message = _message_from_data(data)
-    if message is None or isinstance(message, ToolMessage):
+def _message_events(raw_event: Mapping[object, object]) -> list[StreamEvent]:
+    data = _event_data(raw_event)
+    chunk = data.get("chunk") if isinstance(data, Mapping) else None
+    if not isinstance(chunk, BaseMessage | BaseMessageChunk) or isinstance(chunk, ToolMessage):
         return []
 
-    text = _message_text(message)
+    text = _message_text(chunk)
     if not text:
         return []
     return [MessageDeltaEvent(text=text)]
 
 
-def _message_from_data(data: object) -> BaseMessage | BaseMessageChunk | None:
-    if not isinstance(data, tuple) or not data:
-        return None
-    message = data[0]
-    if isinstance(message, BaseMessage | BaseMessageChunk):
-        return message
-    return None
+def _tool_started_events(raw_event: Mapping[object, object]) -> list[StreamEvent]:
+    tool_name = _optional_string(raw_event.get("name")) or "unknown_tool"
+    return [ToolStartedEvent(tool_name=tool_name, tool_call_id=None)]
+
+
+def _tool_finished_events(raw_event: Mapping[object, object]) -> list[StreamEvent]:
+    data = _event_data(raw_event)
+    output = data.get("output") if isinstance(data, Mapping) else None
+    tool_name = (
+        _tool_message_name(output) or _optional_string(raw_event.get("name")) or "unknown_tool"
+    )
+    tool_call_id = output.tool_call_id if isinstance(output, ToolMessage) else None
+    return [
+        ToolFinishedEvent(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            result=_coerce_tool_response(_tool_output_content(output), tool_name),
+        )
+    ]
+
+
+def _tool_error_events(raw_event: Mapping[object, object]) -> list[StreamEvent]:
+    data = _event_data(raw_event)
+    if not isinstance(data, Mapping):
+        data = {}
+
+    tool_name = _optional_string(raw_event.get("name")) or "unknown_tool"
+    tool_call_id = _optional_string(data.get("tool_call_id"))
+    error = data.get("error")
+    message = (_optional_string(str(error)) if error is not None else None) or (
+        f"Tool failed: {tool_name}."
+    )
+    return [
+        ToolFinishedEvent(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            result=ToolResponse(
+                status=ToolStatus.ERROR,
+                summary=message,
+                next_actions=["Continue without this tool result or try again."],
+            ),
+        )
+    ]
 
 
 def _message_text(message: BaseMessage | BaseMessageChunk) -> str:
@@ -207,19 +195,17 @@ def _optional_string(value: object) -> str | None:
 
 
 def _combine_usage_metadata(
-    usage_by_message_id: Mapping[str, Mapping[str, Any]]
+    usage_by_run_id: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any] | None:
-    if not usage_by_message_id:
+    if not usage_by_run_id:
         return None
 
     combined: dict[str, Any] = {}
-    for usage in usage_by_message_id.values():
+    for usage in usage_by_run_id.values():
         for key, value in usage.items():
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 previous = combined.get(key, 0)
-                combined[key] = (
-                    previous + value if isinstance(previous, int | float) else value
-                )
+                combined[key] = previous + value if isinstance(previous, int | float) else value
                 continue
             combined.setdefault(key, value)
 
