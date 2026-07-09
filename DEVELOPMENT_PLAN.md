@@ -145,7 +145,8 @@ Initial MCP tools:
 
 ## 7. Agent Workflow
 
-Use LangGraph for the main conversation workflow.
+Use a generic bounded model/tool loop now, then move the same state machine into LangGraph
+when graph-level observability and branching are needed.
 
 Initial graph:
 
@@ -157,17 +158,19 @@ Initial graph:
 
 3. `load_context`
    - Load prior agent state only if a conversation ID is provided.
-   - Expose the `get_user_preferences` schema so the model can decide whether compact preference data is needed.
+   - Expose registered tool schemas so the model can decide whether external or stored context is needed.
    - Cache loaded preferences inside the current agent run so repeated nodes do not re-query Supabase.
 
 4. `maybe_clarify`
    - Ask a concise follow-up question if required facts are missing and cannot be safely defaulted.
 
 5. `select_tools`
-   - Let the model choose backend capability tools based on the user intent and available tool schemas.
+   - Let the model choose registered tools based on the user intent and available tool schemas.
 
 6. `call_tools`
    - Call preference, prediction, forecast, recommendation, backend route, or backend itinerary tools.
+   - Append each tool result back into the model context as a tool message.
+   - Stop after a bounded maximum number of tool steps.
 
 7. `synthesize_response`
    - Generate user-facing explanation grounded only in tool results and provided context.

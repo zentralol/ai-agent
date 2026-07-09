@@ -5,14 +5,14 @@ The chat model dependency is overridden with fakes so tests never hit a network.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any, cast
 
 import orjson
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from app.llm import get_chat_model
 from app.main import app
@@ -27,64 +27,33 @@ from app.tools.preferences import (
 client = TestClient(app)
 
 
-class _FakeChunk:
-    def __init__(self, content: str) -> None:
-        self.content = content
-
-
-class _FakeDecision:
-    def __init__(
-        self,
-        content: str,
-        tool_calls: list[dict[str, object]] | None = None,
-    ) -> None:
-        self.content = content
-        self.tool_calls = tool_calls or []
-
-
 class _FakeModel:
     """Minimal stand-in for a LangChain chat model."""
 
     def __init__(
         self,
-        chunks: list[str],
-        decision_content: str = "Hello there!",
-        tool_calls: list[dict[str, object]] | None = None,
+        responses: list[AIMessage] | None = None,
     ) -> None:
-        self._chunks = chunks
-        self._decision_content = decision_content
-        self._tool_calls = tool_calls or []
+        self._responses = responses or [AIMessage(content="Hello there!")]
         self.bound_tools: list[dict[str, object]] | None = None
-        self.decision_messages: list[BaseMessage] | None = None
-        self.stream_messages: list[BaseMessage] | None = None
+        self.messages_by_call: list[list[BaseMessage]] = []
 
     def bind_tools(self, tools: list[dict[str, Any]]) -> _FakeModel:
         self.bound_tools = tools
         return self
 
-    async def ainvoke(self, messages: object) -> _FakeDecision:
-        self.decision_messages = cast(list[BaseMessage], messages)
-        return _FakeDecision(
-            content=self._decision_content,
-            tool_calls=self._tool_calls,
-        )
-
-    async def astream(self, messages: object) -> AsyncIterator[_FakeChunk]:
-        self.stream_messages = cast(list[BaseMessage], messages)
-        for text in self._chunks:
-            yield _FakeChunk(text)
+    async def ainvoke(self, messages: object) -> AIMessage:
+        self.messages_by_call.append(cast(list[BaseMessage], messages))
+        index = min(len(self.messages_by_call) - 1, len(self._responses) - 1)
+        return self._responses[index]
 
 
 class _FailingModel:
     def bind_tools(self, tools: list[dict[str, Any]]) -> _FailingModel:
         return self
 
-    async def ainvoke(self, messages: object) -> _FakeDecision:
+    async def ainvoke(self, messages: object) -> AIMessage:
         raise RuntimeError("boom")
-
-    async def astream(self, messages: object) -> AsyncIterator[_FakeChunk]:
-        raise RuntimeError("boom")
-        yield _FakeChunk("")  # pragma: no cover - unreachable, makes this an async gen
 
 
 class _FakePreferenceTool:
@@ -120,7 +89,7 @@ def _override_model(model: object) -> Iterator[None]:
 
 @pytest.fixture
 def fake_llm() -> Iterator[_FakeModel]:
-    model = _FakeModel(["unused"])
+    model = _FakeModel()
     with _dependency_override(get_chat_model, model):
         yield model
 
@@ -197,8 +166,14 @@ def test_stream_loads_preferences_when_model_requests_tool(
     tool_call: dict[str, object] = {
         "name": GET_USER_PREFERENCES_TOOL_NAME,
         "args": {"categories": ["crowd", "transport"]},
+        "id": "call-pref",
     }
-    model = _FakeModel(["Personalized", " response"], tool_calls=[tool_call])
+    model = _FakeModel(
+        responses=[
+            AIMessage(content="", tool_calls=[tool_call]),
+            AIMessage(content="Personalized response"),
+        ]
+    )
 
     with _dependency_override(get_chat_model, model):
         response = client.post("/api/v1/agent/stream", json=_valid_payload())
@@ -221,10 +196,13 @@ def test_stream_loads_preferences_when_model_requests_tool(
     deltas = [e for e in events if e["type"] == EventType.MESSAGE_DELTA.value]
     assert "".join(str(e["text"]) for e in deltas) == "Personalized response"
 
-    assert model.stream_messages is not None
-    system_message = model.stream_messages[0]
-    assert "Controlled user preference data" in str(system_message.content)
-    assert '"crowd_tolerance":"low"' in str(system_message.content)
+    assert len(model.messages_by_call) == 2
+    second_call_messages = model.messages_by_call[1]
+    tool_messages = [
+        message for message in second_call_messages if isinstance(message, ToolMessage)
+    ]
+    assert tool_messages
+    assert '"crowd_tolerance":"low"' in str(tool_messages[0].content)
 
 
 def test_stream_does_not_load_preferences_without_model_tool_call(

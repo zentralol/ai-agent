@@ -36,9 +36,12 @@ zentra-agent/
 │   ├── main.py              # FastAPI app: /health + mounts the agent router
 │   ├── config.py            # Env-driven, frozen settings (pydantic-settings) + get_settings()
 │   ├── llm.py               # OpenAI-compatible chat model factory (get_chat_model)
+│   ├── agent/
+│   │   └── loop.py          # Generic model/tool loop with bounded tool steps
 │   ├── api/
 │   │   └── agent.py         # POST /api/v1/agent/stream — SSE streaming endpoint
 │   ├── tools/
+│   │   ├── registry.py      # Tool schemas + server-side executors
 │   │   └── preferences.py   # Controlled get_user_preferences tool backed by Supabase
 │   └── schemas/             # Pydantic contracts (immutable, one concern per file)
 │       ├── chat.py          # AgentStreamRequest, ClientType
@@ -48,7 +51,8 @@ zentra-agent/
 ├── tests/                   # pytest suite (network-free)
 │   ├── test_config.py       # Settings loading, defaults, immutability, caching
 │   ├── test_schemas.py      # Request/event validation (Phase 1 acceptance cases)
-│   └── test_agent_stream.py # Endpoint: LLM / fallback / error / 422 paths
+│   ├── test_preferences_tool.py # Preference tool schema and Supabase fallback behavior
+│   └── test_agent_stream.py     # Endpoint: LLM / fallback / error / 422 paths
 ├── docs/NOTES.md            # Scope notes
 ├── DEVELOPMENT_PLAN.md      # Full phased implementation plan
 ├── pyproject.toml           # Dependencies, ruff/mypy/pytest config
@@ -56,16 +60,21 @@ zentra-agent/
 └── README.md
 ```
 
-Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `tools` owns
-server-side capabilities → `schemas` define contracts → `config`/`llm` provide
-configuration and the model client. Packages for later phases (`agent` for LangGraph and
-`adapters` for backend clients) will be added when those features land.
+Layering: `main` wires the app → `api/agent` handles HTTP/SSE → `agent/loop` runs the
+bounded model/tool loop → `tools/registry` exposes tool schemas and executors → `tools`
+owns server-side capabilities → `schemas` define contracts → `config`/`llm` provide
+configuration and the model client. Packages for later phases (`adapters` for backend
+clients) will be added when those features land.
 
 ## Preference Lookup
 
 Clients and the Express gateway should not send arbitrary preference snapshots in the
 chat request. The model receives a narrow `get_user_preferences` tool schema and decides
 whether stored preferences are needed for the current answer.
+
+The agent uses a generic tool-calling loop: every model turn can return text, tool calls,
+or both. Tool results are appended back to the conversation as tool messages, and the model
+continues until it stops requesting tools or hits the bounded step limit.
 
 The tool:
 
