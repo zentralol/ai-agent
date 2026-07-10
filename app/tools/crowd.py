@@ -41,6 +41,11 @@ async def predict_crowd_level(config: RunnableConfig, target_time: str = "") -> 
     pass ``target_time`` as an ISO 8601 date-time (New York local time, e.g.
     "2026-07-10T20:00:00") to forecast a specific time; omit it for right now.
     The location comes from the user's device, not from you.
+
+    When you answer, describe the crowd level in one short, natural sentence
+    (e.g. "It's fairly quiet near you right now."). Do NOT show the user raw
+    fields such as confidence, period, or model version — they are internal
+    metadata, not part of the reply.
     """
 
     request_id = _configurable_string(config, "request_id")
