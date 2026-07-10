@@ -155,7 +155,10 @@ class ItineraryTool:
         try:
             pref_result = await get_user_preference_tool().get_user_preferences(user_id)
         except Exception:
-            logger.warning("itinerary_tool_preference_fetch_failed user=%s", user_id[:4] if user_id else "?")
+            logger.warning(
+                "itinerary_tool_preference_fetch_failed user=%s",
+                user_id[:4] if user_id else "?",
+            )
             return defaults
 
         prefs: dict = pref_result.data.get("preferences", {})
@@ -225,9 +228,10 @@ def _interpret_response(response: httpx.Response) -> ToolResponse:
         )
 
     stops = data.get("stops", [])
+    start_time = stops[0].get("time", "?") if stops else "?"
     return ToolResponse(
         status=ToolStatus.SUCCESS,
-        summary=f"Itinerary built: {len(stops)} stops starting at {data.get('stops', [{}])[0].get('time', '?') if stops else '?'}.",
+        summary=f"Itinerary built: {len(stops)} stops starting at {start_time}.",
         data=data,
     )
 

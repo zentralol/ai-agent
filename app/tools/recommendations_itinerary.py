@@ -59,7 +59,6 @@ async def get_place_recommendations(
     """
 
     request_id = _configurable_string(config, "request_id")
-    conversation_id = _configurable_string(config, "conversation_id")
     user_id = _configurable_string(config, "user_id")
     started_at = perf_counter()
 
@@ -121,7 +120,9 @@ class RecommendationsTool:
         try:
             response = await self._post(base_url, payload)
         except httpx.HTTPError as exc:
-            logger.exception("recommendations_tool_request_failed error_type=%s", type(exc).__name__)
+            logger.exception(
+                "recommendations_tool_request_failed error_type=%s", type(exc).__name__
+            )
             return ToolResponse(
                 status=ToolStatus.ERROR,
                 summary="Failed to reach the recommendations service.",
