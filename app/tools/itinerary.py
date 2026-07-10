@@ -245,12 +245,70 @@ def _interpret_response(response: httpx.Response) -> ToolResponse:
         )
 
     stops = data.get("stops", [])
-    start_time = stops[0].get("time", "?") if stops else "?"
+    if not isinstance(stops, list):
+        stops = []
+
+    candidates: list[dict[str, Any]] = []
+    enriched_stops: list[dict[str, Any]] = []
+    for raw in stops:
+        if not isinstance(raw, dict):
+            continue
+        candidate = _shape_itinerary_candidate(raw)
+        if candidate is None:
+            enriched_stops.append(dict(raw))
+            continue
+        enriched = dict(raw)
+        enriched["candidate_id"] = candidate["candidate_id"]
+        enriched_stops.append(enriched)
+        candidates.append(candidate)
+
+    start_time = enriched_stops[0].get("time", "?") if enriched_stops else "?"
     return ToolResponse(
         status=ToolStatus.SUCCESS,
-        summary=f"Itinerary built: {len(stops)} stops starting at {start_time}.",
-        data=data,
+        summary=f"Itinerary built: {len(enriched_stops)} stops starting at {start_time}.",
+        data={
+            **data,
+            "stops": enriched_stops,
+            "candidates": candidates,
+        },
     )
+
+
+def _shape_itinerary_candidate(raw: dict[str, Any]) -> dict[str, Any] | None:
+    place_id = _as_string(raw.get("place_id"))
+    name = _as_string(raw.get("place_name"))
+    lat = _finite_number(raw.get("lat"))
+    lng = _finite_number(raw.get("lon"))
+    if place_id is None or name is None or lat is None or lng is None:
+        return None
+
+    return {
+        "candidate_id": f"itinerary:{place_id}",
+        "name": name,
+        "lat": lat,
+        "lng": lng,
+        "time": _as_string(raw.get("time")) or "",
+        "neighborhood": _as_string(raw.get("neighborhood")) or "",
+        "category": _as_string(raw.get("category")) or "",
+        "crowd_category": _as_string(raw.get("crowd_category")) or "",
+        "hours": _as_string(raw.get("hours")) or "",
+        "why_recommended": _as_string(raw.get("why_recommended")) or "",
+    }
+
+
+def _as_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        numeric = float(value)
+        if numeric == numeric and numeric not in {float("inf"), float("-inf")}:
+            return numeric
+    return None
 
 
 def _configurable_string(config: RunnableConfig, key: str) -> str | None:
