@@ -85,6 +85,7 @@ class _FakeRepo:
         model: str | None = None,
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
+        parts: list[dict[str, Any]] | None = None,
     ) -> None:
         self.appended.append((role, content))
 

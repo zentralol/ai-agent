@@ -11,6 +11,7 @@ from app.schemas.events import (
     ErrorEvent,
     EventType,
     MessageDeltaEvent,
+    RecommendationsEvent,
     StreamEvent,
     ToolFinishedEvent,
 )
@@ -115,6 +116,21 @@ def test_user_preferences_parse_sanitized_payload() -> None:
     [
         MessageDeltaEvent(text="hello"),
         DoneEvent(conversation_id="c1"),
+        RecommendationsEvent(
+            data={
+                "source": "nearby",
+                "items": [
+                    {
+                        "candidate_id": "google:place-a",
+                        "source": "nearby",
+                        "name": "Place A",
+                        "lat": 40.7,
+                        "lng": -73.9,
+                        "rank": 1,
+                    }
+                ],
+            }
+        ),
         ErrorEvent(code="E_TIMEOUT", message="timed out"),
         ToolFinishedEvent(
             tool_name="predict_crowd_batch",

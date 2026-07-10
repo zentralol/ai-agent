@@ -8,6 +8,7 @@ the runtime config and is never returned to the model.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from functools import lru_cache
 from time import perf_counter
@@ -26,6 +27,7 @@ GET_NEARBY_PLACES_TOOL_NAME = "get_nearby_places"
 PLACES_SEARCH_TEXT_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_FIELD_MASK = ",".join(
     (
+        "places.id",
         "places.displayName",
         "places.formattedAddress",
         "places.location",
@@ -206,6 +208,12 @@ def _shape_places(
         )
         shaped.append(
             {
+                "candidate_id": _candidate_id(
+                    place.get("id"),
+                    _nested_text(place.get("displayName")),
+                    place_lat,
+                    place_lng,
+                ),
                 "name": _nested_text(place.get("displayName")),
                 "address": _as_string(place.get("formattedAddress")),
                 "primary_type": _nested_text(place.get("primaryTypeDisplayName")),
@@ -219,6 +227,19 @@ def _shape_places(
             }
         )
     return shaped
+
+
+def _candidate_id(
+    external_id: object,
+    name: str,
+    lat: float | None,
+    lng: float | None,
+) -> str:
+    if isinstance(external_id, str) and external_id.strip():
+        return f"google:{external_id.removeprefix('places/').strip()}"
+    fallback = f"{name.strip().lower()}|{lat}|{lng}"
+    digest = hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:20]
+    return f"google:fallback-{digest}"
 
 
 def _nested_text(value: object) -> str:

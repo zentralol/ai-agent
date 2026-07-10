@@ -20,12 +20,15 @@ from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.tools import BaseTool
 from pydantic import Field
 
+import app.tools.places as places_module
 import app.tools.preferences as preference_tools
 from app.llm import get_chat_model
 from app.main import app
 from app.schemas.events import EventType
 from app.schemas.tools import ToolResponse, ToolStatus
+from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.preferences import GET_USER_PREFERENCES_TOOL_NAME
+from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
 
 client = TestClient(app)
 
@@ -202,6 +205,39 @@ class _FakePreferenceTool:
         )
 
 
+class _FakePlacesTool:
+    async def search_nearby(self, query: str, lat: float, lng: float) -> ToolResponse:
+        return ToolResponse(
+            status=ToolStatus.SUCCESS,
+            summary=f"Found places for {query}.",
+            data={
+                "places": [
+                    {
+                        "candidate_id": "google:place-a",
+                        "name": "Place A",
+                        "address": "1 Main St",
+                        "primary_type": "Cafe",
+                        "lat": 40.7,
+                        "lng": -73.9,
+                        "rating": 4.5,
+                        "distance_km": 0.2,
+                    },
+                    {
+                        "candidate_id": "google:place-b",
+                        "name": "Place B",
+                        "address": "2 Main St",
+                        "primary_type": "Cafe",
+                        "lat": 40.71,
+                        "lng": -73.91,
+                        "rating": 4.0,
+                        "distance_km": 0.4,
+                    },
+                ],
+                "query": query,
+            },
+        )
+
+
 def _override_model(model: object) -> Iterator[None]:
     app.dependency_overrides[get_chat_model] = lambda: model
     try:
@@ -329,6 +365,71 @@ def test_stream_loads_preferences_when_model_requests_tool(
     ]
     assert tool_messages
     assert '"crowd_tolerance":"avoid"' in str(tool_messages[0].content)
+
+
+def test_stream_emits_only_structured_recommendations_in_selection_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(places_module, "get_places_tool", lambda: _FakePlacesTool())
+    model = _FakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": GET_NEARBY_PLACES_TOOL_NAME,
+                        "args": {"query": "coffee"},
+                        "id": "call-search",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": SELECT_RECOMMENDED_PLACES_TOOL_NAME,
+                        "args": {
+                            "recommendations": [
+                                {
+                                    "candidate_id": "google:place-b",
+                                    "reason": "Quieter",
+                                }
+                            ]
+                        },
+                        "id": "call-select",
+                    }
+                ],
+            ),
+            AIMessage(content="I recommend Place B."),
+        ]
+    )
+
+    with _dependency_override(get_chat_model, model):
+        response = client.post(
+            "/api/v1/agent/stream",
+            json={**_valid_payload(), "lat": 40.7, "lng": -73.9},
+        )
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    _assert_sequence(events)
+    recommendation_events = [
+        event for event in events if event["type"] == "recommendations"
+    ]
+    assert len(recommendation_events) == 1
+    assert recommendation_events[0]["data"]["items"] == [
+        {
+            "candidate_id": "google:place-b",
+            "source": "nearby",
+            "name": "Place B",
+            "lat": 40.71,
+            "lng": -73.91,
+            "subtitle": "2 Main St",
+            "detail": "Cafe · ★ 4.0 · 0.4 km",
+            "rank": 1,
+            "reason": "Quieter",
+        }
+    ]
 
 
 def test_stream_reconstructs_tool_call_streamed_across_multiple_chunks(

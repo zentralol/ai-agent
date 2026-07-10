@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.recommendations import RecommendationData
 from app.schemas.tools import ToolResponse
 
 
@@ -20,6 +21,7 @@ class EventType(StrEnum):
     MESSAGE_DELTA = "message_delta"
     TOOL_STARTED = "tool_started"
     TOOL_FINISHED = "tool_finished"
+    RECOMMENDATIONS = "recommendations"
     BACKEND_CAPABILITY_RESULT = "backend_capability_result"
     WARNING = "warning"
     DONE = "done"
@@ -84,6 +86,13 @@ class BackendCapabilityResultEvent(_BaseEvent):
     result: ToolResponse = Field(description="Structured capability result envelope.")
 
 
+class RecommendationsEvent(_BaseEvent):
+    """Final, validated place selections in the exact card display order."""
+
+    type: Literal[EventType.RECOMMENDATIONS] = EventType.RECOMMENDATIONS
+    data: RecommendationData = Field(description="Ordered place card snapshot.")
+
+
 class WarningEvent(_BaseEvent):
     """Non-fatal warning surfaced during the run."""
 
@@ -117,6 +126,7 @@ StreamEvent = Annotated[
     | ToolStartedEvent
     | ToolFinishedEvent
     | BackendCapabilityResultEvent
+    | RecommendationsEvent
     | WarningEvent
     | DoneEvent
     | ErrorEvent,

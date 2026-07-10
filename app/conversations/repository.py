@@ -139,6 +139,7 @@ class ConversationRepository:
         model: str | None = None,
         prompt_tokens: int | None = None,
         completion_tokens: int | None = None,
+        parts: list[dict[str, Any]] | None = None,
     ) -> None:
         """Insert one message row. A DB trigger bumps the conversation's updated_at."""
 
@@ -157,6 +158,7 @@ class ConversationRepository:
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "metadata": {"ui_message_id": ui_message_id},
+                    "parts": parts or [],
                 }
             )
             .execute()
