@@ -20,6 +20,7 @@ from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.tools import BaseTool
 from pydantic import Field
 
+import app.tools.itinerary as itinerary_module
 import app.tools.places as places_module
 import app.tools.preferences as preference_tools
 import app.tools.recommendations_itinerary as recommendations_module
@@ -27,6 +28,7 @@ from app.llm import get_chat_model
 from app.main import app
 from app.schemas.events import EventType
 from app.schemas.tools import ToolResponse, ToolStatus
+from app.tools.itinerary import PLAN_ITINERARY_TOOL_NAME
 from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.preferences import GET_USER_PREFERENCES_TOOL_NAME
 from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
@@ -272,6 +274,70 @@ class _FakeRecommendationsTool:
                     }
                 ],
                 "based_on": "Quiet parks.",
+            },
+        )
+
+
+class _FakeItineraryTool:
+    async def plan(self, **kwargs: Any) -> ToolResponse:
+        return ToolResponse(
+            status=ToolStatus.SUCCESS,
+            summary="Itinerary built: 2 stops starting at 16:00.",
+            data={
+                "stops": [
+                    {
+                        "time": "16:00",
+                        "place_id": "washington-square",
+                        "place_name": "Washington Square Park",
+                        "candidate_id": "itinerary:washington-square",
+                        "lat": 40.7308,
+                        "lon": -73.9973,
+                        "neighborhood": "Greenwich Village",
+                        "category": "park",
+                        "crowd_category": "Very busy",
+                        "hours": "Open 24 hours",
+                        "why_recommended": "Historic park stroll",
+                    },
+                    {
+                        "time": "20:10",
+                        "place_id": "essex-market",
+                        "place_name": "Essex Market",
+                        "candidate_id": "itinerary:essex-market",
+                        "lat": 40.7185,
+                        "lon": -73.9877,
+                        "neighborhood": "Lower East Side",
+                        "category": "food",
+                        "crowd_category": "Moderate",
+                        "hours": "08:00-21:00",
+                        "why_recommended": "Vegetarian-friendly dinner",
+                    },
+                ],
+                "candidates": [
+                    {
+                        "candidate_id": "itinerary:washington-square",
+                        "name": "Washington Square Park",
+                        "lat": 40.7308,
+                        "lng": -73.9973,
+                        "time": "16:00",
+                        "neighborhood": "Greenwich Village",
+                        "category": "park",
+                        "crowd_category": "Very busy",
+                        "hours": "Open 24 hours",
+                        "why_recommended": "Historic park stroll",
+                    },
+                    {
+                        "candidate_id": "itinerary:essex-market",
+                        "name": "Essex Market",
+                        "lat": 40.7185,
+                        "lng": -73.9877,
+                        "time": "20:10",
+                        "neighborhood": "Lower East Side",
+                        "category": "food",
+                        "crowd_category": "Moderate",
+                        "hours": "08:00-21:00",
+                        "why_recommended": "Vegetarian-friendly dinner",
+                    },
+                ],
             },
         )
 
@@ -570,6 +636,53 @@ def test_stream_backfills_recommendations_when_selection_is_skipped(
     assert len(recommendation_events) == 1
     assert recommendation_events[0]["data"]["source"] == "recommend"
     assert recommendation_events[0]["data"]["items"][0]["name"] == "Fort Tryon Park"
+
+
+def test_stream_emits_recommendations_from_itinerary_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        itinerary_module,
+        "get_itinerary_tool",
+        lambda: _FakeItineraryTool(),
+    )
+    model = _FakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": PLAN_ITINERARY_TOOL_NAME,
+                        "args": {
+                            "anchor_place": "Greenwich Village",
+                            "anchor_time": "2026-07-10T16:00:00",
+                            "duration_hours": 6,
+                        },
+                        "id": "call-itinerary",
+                    }
+                ],
+            ),
+            AIMessage(content="Here is your relaxed Greenwich Village evening."),
+        ]
+    )
+
+    with _dependency_override(get_chat_model, model):
+        response = client.post("/api/v1/agent/stream", json=_valid_payload())
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    recommendation_events = [
+        event for event in events if event["type"] == "recommendations"
+    ]
+    assert len(recommendation_events) == 1
+    assert recommendation_events[0]["data"]["source"] == "itinerary"
+    assert [item["name"] for item in recommendation_events[0]["data"]["items"]] == [
+        "Washington Square Park",
+        "Essex Market",
+    ]
+    assert recommendation_events[0]["data"]["items"][0]["reason"] == (
+        "Historic park stroll"
+    )
 
 
 def test_stream_reconstructs_tool_call_streamed_across_multiple_chunks(

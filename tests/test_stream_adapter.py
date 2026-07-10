@@ -9,6 +9,7 @@ from langchain_core.messages import ToolMessage
 from app.agent.stream_adapter import LangChainStreamAdapter
 from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.attractions import GET_NEAREST_ATTRACTIONS_TOOL_NAME
+from app.tools.itinerary import PLAN_ITINERARY_TOOL_NAME
 from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
 from app.tools.recommendations_itinerary import RECOMMEND_TOOL_NAME
@@ -213,3 +214,104 @@ def test_infer_recommendations_from_text_backfills_backend_cards() -> None:
     assert data.source == "recommend"
     assert [item.name for item in data.items] == ["Fort Tryon Park", "Joe's Pub"]
     assert [item.rank for item in data.items] == [1, 2]
+
+
+def _itinerary_response() -> ToolResponse:
+    return ToolResponse(
+        status=ToolStatus.SUCCESS,
+        summary="Itinerary built: 2 stops.",
+        data={
+            "stops": [
+                {
+                    "time": "16:00",
+                    "place_id": "washington-square",
+                    "place_name": "Washington Square Park",
+                    "candidate_id": "itinerary:washington-square",
+                    "lat": 40.7308,
+                    "lon": -73.9973,
+                    "neighborhood": "Greenwich Village",
+                    "category": "park",
+                    "crowd_category": "Very busy",
+                    "hours": "Open 24 hours",
+                    "why_recommended": "Historic park stroll",
+                },
+                {
+                    "time": "20:10",
+                    "place_id": "essex-market",
+                    "place_name": "Essex Market",
+                    "candidate_id": "itinerary:essex-market",
+                    "lat": 40.7185,
+                    "lon": -73.9877,
+                    "neighborhood": "Lower East Side",
+                    "category": "food",
+                    "crowd_category": "Moderate",
+                    "hours": "08:00-21:00",
+                    "why_recommended": "Vegetarian-friendly dinner",
+                },
+            ],
+            "candidates": [
+                {
+                    "candidate_id": "itinerary:washington-square",
+                    "name": "Washington Square Park",
+                    "lat": 40.7308,
+                    "lng": -73.9973,
+                    "time": "16:00",
+                    "neighborhood": "Greenwich Village",
+                    "category": "park",
+                    "crowd_category": "Very busy",
+                    "hours": "Open 24 hours",
+                    "why_recommended": "Historic park stroll",
+                },
+                {
+                    "candidate_id": "itinerary:essex-market",
+                    "name": "Essex Market",
+                    "lat": 40.7185,
+                    "lng": -73.9877,
+                    "time": "20:10",
+                    "neighborhood": "Lower East Side",
+                    "category": "food",
+                    "crowd_category": "Moderate",
+                    "hours": "08:00-21:00",
+                    "why_recommended": "Vegetarian-friendly dinner",
+                },
+            ],
+        },
+    )
+
+
+def test_itinerary_auto_selects_all_stops_in_order() -> None:
+    adapter = LangChainStreamAdapter()
+    adapter.to_zentra_events(
+        _tool_end_event(PLAN_ITINERARY_TOOL_NAME, _itinerary_response())
+    )
+
+    data = adapter.recommendation_data
+    assert data is not None
+    assert data.source == "itinerary"
+    assert [item.name for item in data.items] == [
+        "Washington Square Park",
+        "Essex Market",
+    ]
+    assert [item.rank for item in data.items] == [1, 2]
+    assert data.items[0].subtitle == "16:00 · Greenwich Village"
+    assert data.items[0].detail == "park · Very busy · Open 24 hours"
+    assert data.items[0].reason == "Historic park stroll"
+
+
+def test_infer_recommendations_from_text_backfills_itinerary_cards() -> None:
+    adapter = LangChainStreamAdapter()
+    response = _itinerary_response()
+    response.data.pop("stops", None)
+    adapter.to_zentra_events(_tool_end_event(PLAN_ITINERARY_TOOL_NAME, response))
+
+    adapter.infer_recommendations_from_text(
+        "Start at Washington Square Park, then dinner at Essex Market."
+    )
+
+    data = adapter.recommendation_data
+    assert data is not None
+    assert data.source == "itinerary"
+    assert [item.name for item in data.items] == [
+        "Washington Square Park",
+        "Essex Market",
+    ]

@@ -26,6 +26,7 @@ from app.schemas.recommendations import (
 )
 from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.attractions import GET_NEAREST_ATTRACTIONS_TOOL_NAME
+from app.tools.itinerary import PLAN_ITINERARY_TOOL_NAME
 from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
 from app.tools.recommendations_itinerary import RECOMMEND_TOOL_NAME
@@ -65,22 +66,29 @@ class LangChainStreamAdapter:
         return RecommendationsEvent(data=self._recommendation_data)
 
     def infer_recommendations_from_text(self, assistant_text: str) -> None:
-        """Backfill cards when the model recommended backend places but skipped selection."""
+        """Backfill cards when the model skipped structured selection."""
 
         if self._recommendation_data is not None or not assistant_text.strip():
             return
 
-        recommend_candidates = [
-            candidate
-            for candidate in self._candidates.values()
-            if candidate.source == "recommend"
+        for source in ("recommend", "itinerary"):
+            selected = self._match_candidates_in_text(assistant_text, source)
+            if selected:
+                self._recommendation_data = RecommendationData(source=source, items=selected)
+                return
+
+    def _match_candidates_in_text(
+        self, assistant_text: str, source: Literal["recommend", "itinerary"]
+    ) -> list[RecommendationItem]:
+        candidates = [
+            candidate for candidate in self._candidates.values() if candidate.source == source
         ]
-        if not recommend_candidates:
-            return
+        if not candidates:
+            return []
 
         lowered = assistant_text.casefold()
         selected: list[RecommendationItem] = []
-        for candidate in recommend_candidates:
+        for candidate in candidates:
             if candidate.name.casefold() not in lowered:
                 continue
             selected.append(
@@ -90,11 +98,7 @@ class LangChainStreamAdapter:
                     reason="",
                 )
             )
-
-        if not selected:
-            return
-
-        self._recommendation_data = RecommendationData(source="recommend", items=selected)
+        return selected
 
     def ui_parts(self) -> list[dict[str, Any]]:
         """Return persisted UI parts using the same snapshot sent to the client."""
@@ -138,14 +142,17 @@ class LangChainStreamAdapter:
                 GET_NEARBY_PLACES_TOOL_NAME,
                 GET_NEAREST_ATTRACTIONS_TOOL_NAME,
                 RECOMMEND_TOOL_NAME,
+                PLAN_ITINERARY_TOOL_NAME,
             }:
                 self._register_candidates(event)
+                if event.tool_name == PLAN_ITINERARY_TOOL_NAME:
+                    self._auto_select_itinerary_stops(event.result.data)
             elif event.tool_name == SELECT_RECOMMENDED_PLACES_TOOL_NAME:
                 self._set_recommendations(event.result.data)
         return events
 
     def _register_candidates(self, event: ToolFinishedEvent) -> None:
-        if event.tool_name == RECOMMEND_TOOL_NAME:
+        if event.tool_name in {RECOMMEND_TOOL_NAME, PLAN_ITINERARY_TOOL_NAME}:
             collection_key = "candidates"
         elif event.tool_name == GET_NEARBY_PLACES_TOOL_NAME:
             collection_key = "places"
@@ -196,6 +203,38 @@ class LangChainStreamAdapter:
         sources = {item.source for item in selected}
         source = next(iter(sources)) if len(sources) == 1 else "mixed"
         self._recommendation_data = RecommendationData(source=source, items=selected)
+
+    def _auto_select_itinerary_stops(self, data: Mapping[str, Any]) -> None:
+        if self._recommendation_data is not None:
+            return
+
+        raw_stops = data.get("stops")
+        if not isinstance(raw_stops, list):
+            return
+
+        selected: list[RecommendationItem] = []
+        for raw in raw_stops:
+            if not isinstance(raw, Mapping):
+                continue
+            candidate_id = _optional_string(raw.get("candidate_id"))
+            if candidate_id is None:
+                continue
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None:
+                continue
+            reason = _as_string(raw.get("why_recommended"))[:500]
+            selected.append(
+                RecommendationItem(
+                    **candidate.model_dump(),
+                    rank=len(selected) + 1,
+                    reason=reason,
+                )
+            )
+
+        if not selected:
+            return
+
+        self._recommendation_data = RecommendationData(source="itinerary", items=selected)
 
     def _handle_message_stream(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
         events = _message_events(raw_event)
@@ -255,7 +294,7 @@ def _candidate_from_tool_result(
                 _format_distance(raw.get("distance_km")),
             ]
         )
-        source: Literal["nearby", "attractions", "recommend"] = "nearby"
+        source: Literal["nearby", "attractions", "recommend", "itinerary"] = "nearby"
     elif tool_name == GET_NEAREST_ATTRACTIONS_TOOL_NAME:
         subtitle = _as_string(raw.get("neighborhood"))
         detail = _join_detail(
@@ -265,6 +304,21 @@ def _candidate_from_tool_result(
             ]
         )
         source = "attractions"
+    elif tool_name == PLAN_ITINERARY_TOOL_NAME:
+        subtitle = _join_detail(
+            [
+                _as_string(raw.get("time")),
+                _as_string(raw.get("neighborhood")),
+            ]
+        )
+        detail = _join_detail(
+            [
+                _as_string(raw.get("category")),
+                _as_string(raw.get("crowd_category")),
+                _as_string(raw.get("hours")),
+            ]
+        )
+        source = "itinerary"
     else:
         subtitle = _as_string(raw.get("neighborhood"))
         detail = _join_detail(
