@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     llm_api_key: str | None = Field(default=None, alias="LLM_API_KEY")
     llm_base_url: str | None = Field(default=None, alias="LLM_BASE_URL")
 
+    # Shared secret for internal service-to-service auth. The Express gateway
+    # sends it as the ``X-Internal-Service-Token`` header on every call. When
+    # unset, inbound auth is skipped (development only) and a warning is logged.
+    agent_internal_token: str | None = Field(default=None, alias="AGENT_INTERNAL_TOKEN")
+
     # Supabase access stays server-side. It is used for controlled preference
     # lookup and later for agent-owned run/trace tables.
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")

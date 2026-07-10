@@ -16,12 +16,17 @@ from fastapi.responses import StreamingResponse
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.agent.runner import run_agent_stream
+from app.api.internal_auth import require_internal_auth
 from app.llm import get_chat_model
 from app.schemas.chat import AgentStreamRequest
 from app.schemas.events import DoneEvent, MessageDeltaEvent, StreamEvent, WarningEvent
 from app.tools.catalog import AGENT_TOOLS
 
-router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+router = APIRouter(
+    prefix="/api/v1/agent",
+    tags=["agent"],
+    dependencies=[Depends(require_internal_auth)],
+)
 
 SSE_MEDIA_TYPE = "text/event-stream"
 
