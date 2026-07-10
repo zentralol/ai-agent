@@ -2,7 +2,7 @@
 
 Fetches the user's stored preferences from Supabase, maps them to the
 inline_profile format zentra-recommend expects, then POSTs to
-/itinerary/plan and returns the full day plan.
+POST /api/v1/itinerary/plan and returns the full day plan.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.preferences import get_user_preference_tool
 
 PLAN_ITINERARY_TOOL_NAME = "plan_itinerary"
-ITINERARY_PATH = "/itinerary/plan"
+ITINERARY_PATH = "/api/v1/itinerary/plan"
 SERVICE_TOKEN_HEADER = "X-Internal-Service-Token"
 HTTP_TIMEOUT_SECONDS = 60.0
 

@@ -21,7 +21,7 @@ from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.preferences import get_user_preference_tool
 
 RECOMMEND_TOOL_NAME = "get_place_recommendations"
-RECOMMEND_PATH = "/recommend/"
+RECOMMEND_PATH = "/api/v1/recommend"
 SERVICE_TOKEN_HEADER = "X-Internal-Service-Token"
 HTTP_TIMEOUT_SECONDS = 20.0
 
