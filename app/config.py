@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # nearby-places tool. When unset, that tool degrades with a warning.
     google_maps_api_key: str | None = Field(default=None, alias="GOOGLE_MAPS_API_KEY")
 
+    # Express backend base URL for agent -> backend capability calls (e.g. crowd
+    # predictions). The agent authenticates with agent_internal_token as the
+    # X-Internal-Service-Token header. When unset, those tools degrade.
+    backend_api_base_url: str | None = Field(
+        default=None, alias="BACKEND_API_BASE_URL"
+    )
+
     # Supabase access stays server-side. It is used for controlled preference
     # lookup and later for agent-owned run/trace tables.
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
