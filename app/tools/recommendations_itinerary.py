@@ -221,12 +221,68 @@ def _interpret_response(response: httpx.Response) -> ToolResponse:
         )
 
     recs = data.get("recommendations", [])
+    if not isinstance(recs, list):
+        recs = []
+
+    candidates: list[dict[str, Any]] = []
+    enriched_recs: list[dict[str, Any]] = []
+    for raw in recs:
+        if not isinstance(raw, dict):
+            continue
+        candidate = _shape_recommendation_candidate(raw)
+        if candidate is None:
+            enriched_recs.append(dict(raw))
+            continue
+        enriched = dict(raw)
+        enriched["candidate_id"] = candidate["candidate_id"]
+        enriched_recs.append(enriched)
+        candidates.append(candidate)
+
     based_on = data.get("based_on", "")
     return ToolResponse(
         status=ToolStatus.SUCCESS,
-        summary=f"{len(recs)} recommendations returned. {based_on}",
-        data=data,
+        summary=f"{len(enriched_recs)} recommendations returned. {based_on}",
+        data={
+            **data,
+            "recommendations": enriched_recs,
+            "candidates": candidates,
+        },
     )
+
+
+def _shape_recommendation_candidate(raw: dict[str, Any]) -> dict[str, Any] | None:
+    place_id = _as_string(raw.get("id"))
+    name = _as_string(raw.get("name"))
+    lat = _finite_number(raw.get("lat"))
+    lng = _finite_number(raw.get("lon"))
+    if place_id is None or name is None or lat is None or lng is None:
+        return None
+
+    return {
+        "candidate_id": f"recommend:{place_id}",
+        "name": name,
+        "lat": lat,
+        "lng": lng,
+        "neighborhood": _as_string(raw.get("neighborhood")),
+        "category": _as_string(raw.get("category")),
+        "crowd_category": _as_string(raw.get("crowd_category")),
+        "hours": _as_string(raw.get("hours")),
+    }
+
+
+def _as_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        numeric = float(value)
+        if numeric == numeric and numeric not in {float("inf"), float("-inf")}:
+            return numeric
+    return None
 
 
 def _configurable_string(config: RunnableConfig, key: str) -> str | None:

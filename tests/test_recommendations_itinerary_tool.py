@@ -15,6 +15,22 @@ from app.tools.recommendations_itinerary import (
     get_place_recommendations,
 )
 
+_FULL_RECOMMEND_RESPONSE: dict[str, Any] = {
+    "recommendations": [
+        {
+            "id": "fort-tryon",
+            "name": "Fort Tryon Park",
+            "lat": 40.8617,
+            "lon": -73.9326,
+            "neighborhood": "Washington Heights",
+            "category": "park",
+            "crowd_category": "Very quiet",
+            "hours": "Open until 1:00 AM",
+        }
+    ],
+    "based_on": "Your interests in quiet parks.",
+}
+
 _RECOMMEND_RESPONSE: dict[str, Any] = {
     "recommendations": [{"name": "MoMA"}],
     "based_on": "Your interests in art.",
@@ -112,3 +128,33 @@ async def test_recommend_proceeds_with_ascii_query() -> None:
 
     assert result.status == ToolStatus.SUCCESS
     assert "1 recommendations" in result.summary
+
+
+@pytest.mark.asyncio
+async def test_recommend_shapes_navigable_candidates() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_FULL_RECOMMEND_RESPONSE)
+
+    tool = _mock_tool(handler)
+    result = await tool.recommend(
+        user_id=None,
+        query="quiet parks",
+        category=None,
+        budget=None,
+        count=6,
+    )
+
+    assert result.status == ToolStatus.SUCCESS
+    assert result.data["candidates"] == [
+        {
+            "candidate_id": "recommend:fort-tryon",
+            "name": "Fort Tryon Park",
+            "lat": 40.8617,
+            "lng": -73.9326,
+            "neighborhood": "Washington Heights",
+            "category": "park",
+            "crowd_category": "Very quiet",
+            "hours": "Open until 1:00 AM",
+        }
+    ]
+    assert result.data["recommendations"][0]["candidate_id"] == "recommend:fort-tryon"

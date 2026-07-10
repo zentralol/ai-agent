@@ -28,6 +28,7 @@ from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.attractions import GET_NEAREST_ATTRACTIONS_TOOL_NAME
 from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
+from app.tools.recommendations_itinerary import RECOMMEND_TOOL_NAME
 
 
 class LangChainStreamAdapter:
@@ -62,6 +63,38 @@ class LangChainStreamAdapter:
         if self._recommendation_data is None:
             return None
         return RecommendationsEvent(data=self._recommendation_data)
+
+    def infer_recommendations_from_text(self, assistant_text: str) -> None:
+        """Backfill cards when the model recommended backend places but skipped selection."""
+
+        if self._recommendation_data is not None or not assistant_text.strip():
+            return
+
+        recommend_candidates = [
+            candidate
+            for candidate in self._candidates.values()
+            if candidate.source == "recommend"
+        ]
+        if not recommend_candidates:
+            return
+
+        lowered = assistant_text.casefold()
+        selected: list[RecommendationItem] = []
+        for candidate in recommend_candidates:
+            if candidate.name.casefold() not in lowered:
+                continue
+            selected.append(
+                RecommendationItem(
+                    **candidate.model_dump(),
+                    rank=len(selected) + 1,
+                    reason="",
+                )
+            )
+
+        if not selected:
+            return
+
+        self._recommendation_data = RecommendationData(source="recommend", items=selected)
 
     def ui_parts(self) -> list[dict[str, Any]]:
         """Return persisted UI parts using the same snapshot sent to the client."""
@@ -104,6 +137,7 @@ class LangChainStreamAdapter:
             if event.tool_name in {
                 GET_NEARBY_PLACES_TOOL_NAME,
                 GET_NEAREST_ATTRACTIONS_TOOL_NAME,
+                RECOMMEND_TOOL_NAME,
             }:
                 self._register_candidates(event)
             elif event.tool_name == SELECT_RECOMMENDED_PLACES_TOOL_NAME:
@@ -111,11 +145,12 @@ class LangChainStreamAdapter:
         return events
 
     def _register_candidates(self, event: ToolFinishedEvent) -> None:
-        collection_key = (
-            "places"
-            if event.tool_name == GET_NEARBY_PLACES_TOOL_NAME
-            else "attractions"
-        )
+        if event.tool_name == RECOMMEND_TOOL_NAME:
+            collection_key = "candidates"
+        elif event.tool_name == GET_NEARBY_PLACES_TOOL_NAME:
+            collection_key = "places"
+        else:
+            collection_key = "attractions"
         raw_items = event.result.data.get(collection_key)
         if not isinstance(raw_items, list):
             return
@@ -220,8 +255,8 @@ def _candidate_from_tool_result(
                 _format_distance(raw.get("distance_km")),
             ]
         )
-        source: Literal["nearby", "attractions"] = "nearby"
-    else:
+        source: Literal["nearby", "attractions", "recommend"] = "nearby"
+    elif tool_name == GET_NEAREST_ATTRACTIONS_TOOL_NAME:
         subtitle = _as_string(raw.get("neighborhood"))
         detail = _join_detail(
             [
@@ -230,6 +265,16 @@ def _candidate_from_tool_result(
             ]
         )
         source = "attractions"
+    else:
+        subtitle = _as_string(raw.get("neighborhood"))
+        detail = _join_detail(
+            [
+                _as_string(raw.get("category")),
+                _as_string(raw.get("crowd_category")),
+                _as_string(raw.get("hours")),
+            ]
+        )
+        source = "recommend"
 
     return CandidatePlace(
         candidate_id=candidate_id,
