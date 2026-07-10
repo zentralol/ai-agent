@@ -51,6 +51,14 @@ class Settings(BaseSettings):
         default=3.0, alias="SUPABASE_TIMEOUT_SECONDS"
     )
 
+    # Conversation persistence. The agent owns reading history for context and
+    # writing user/assistant turns. Table names are fixed constants in
+    # app.conversations.repository since they must match the product's Supabase
+    # migrations; only the history window is tunable.
+    conversation_history_limit: int = Field(
+        default=20, alias="CONVERSATION_HISTORY_LIMIT"
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
