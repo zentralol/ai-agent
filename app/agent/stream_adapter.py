@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.messages import (
     AIMessage,
@@ -14,11 +14,20 @@ from langchain_core.messages import (
 
 from app.schemas.events import (
     MessageDeltaEvent,
+    RecommendationsEvent,
     StreamEvent,
     ToolFinishedEvent,
     ToolStartedEvent,
 )
+from app.schemas.recommendations import (
+    CandidatePlace,
+    RecommendationData,
+    RecommendationItem,
+)
 from app.schemas.tools import ToolResponse, ToolStatus
+from app.tools.attractions import GET_NEAREST_ATTRACTIONS_TOOL_NAME
+from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
+from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
 
 
 class LangChainStreamAdapter:
@@ -32,12 +41,39 @@ class LangChainStreamAdapter:
     def __init__(self) -> None:
         self._usage_by_run_id: dict[str, dict[str, Any]] = {}
         self._streamed_text_run_ids: set[str] = set()
+        self._candidates: dict[str, CandidatePlace] = {}
+        self._recommendation_data: RecommendationData | None = None
 
     @property
     def usage(self) -> dict[str, Any] | None:
         """Aggregated model usage metadata reported by completed model runs."""
 
         return _combine_usage_metadata(self._usage_by_run_id)
+
+    @property
+    def recommendation_data(self) -> RecommendationData | None:
+        """Return the last validated recommendation selection, if any."""
+
+        return self._recommendation_data
+
+    def recommendation_event(self) -> RecommendationsEvent | None:
+        """Build one final structured event after the agent has completed."""
+
+        if self._recommendation_data is None:
+            return None
+        return RecommendationsEvent(data=self._recommendation_data)
+
+    def ui_parts(self) -> list[dict[str, Any]]:
+        """Return persisted UI parts using the same snapshot sent to the client."""
+
+        if self._recommendation_data is None:
+            return []
+        return [
+            {
+                "type": "data-places",
+                "data": self._recommendation_data.model_dump(mode="json"),
+            }
+        ]
 
     def to_zentra_events(self, raw_event: object) -> list[StreamEvent]:
         """Map one raw LangChain v2 event-stream payload to public events."""
@@ -53,10 +89,78 @@ class LangChainStreamAdapter:
         if event_name == "on_tool_start":
             return _tool_started_events(raw_event)
         if event_name == "on_tool_end":
-            return _tool_finished_events(raw_event)
+            return self._handle_tool_end(raw_event)
         if event_name == "on_tool_error":
             return _tool_error_events(raw_event)
         return []
+
+    def _handle_tool_end(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
+        events = _tool_finished_events(raw_event)
+        for event in events:
+            if not isinstance(event, ToolFinishedEvent):
+                continue
+            if event.result.status is not ToolStatus.SUCCESS:
+                continue
+            if event.tool_name in {
+                GET_NEARBY_PLACES_TOOL_NAME,
+                GET_NEAREST_ATTRACTIONS_TOOL_NAME,
+            }:
+                self._register_candidates(event)
+            elif event.tool_name == SELECT_RECOMMENDED_PLACES_TOOL_NAME:
+                self._set_recommendations(event.result.data)
+        return events
+
+    def _register_candidates(self, event: ToolFinishedEvent) -> None:
+        collection_key = (
+            "places"
+            if event.tool_name == GET_NEARBY_PLACES_TOOL_NAME
+            else "attractions"
+        )
+        raw_items = event.result.data.get(collection_key)
+        if not isinstance(raw_items, list):
+            return
+
+        for raw in raw_items:
+            if not isinstance(raw, Mapping):
+                continue
+            candidate = _candidate_from_tool_result(event.tool_name, raw)
+            if candidate is not None:
+                self._candidates.setdefault(candidate.candidate_id, candidate)
+
+    def _set_recommendations(self, data: Mapping[str, Any]) -> None:
+        raw_items = data.get("recommendations")
+        if not isinstance(raw_items, list):
+            self._recommendation_data = None
+            return
+
+        selected: list[RecommendationItem] = []
+        seen_ids: set[str] = set()
+        for raw in raw_items:
+            if not isinstance(raw, Mapping):
+                continue
+            candidate_id = _optional_string(raw.get("candidate_id"))
+            if candidate_id is None or candidate_id in seen_ids:
+                continue
+            candidate = self._candidates.get(candidate_id)
+            if candidate is None:
+                continue
+            reason = _optional_string(raw.get("reason")) or ""
+            selected.append(
+                RecommendationItem(
+                    **candidate.model_dump(),
+                    rank=len(selected) + 1,
+                    reason=reason,
+                )
+            )
+            seen_ids.add(candidate_id)
+
+        if not selected:
+            self._recommendation_data = None
+            return
+
+        sources = {item.source for item in selected}
+        source = next(iter(sources)) if len(sources) == 1 else "mixed"
+        self._recommendation_data = RecommendationData(source=source, items=selected)
 
     def _handle_message_stream(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
         events = _message_events(raw_event)
@@ -95,6 +199,75 @@ class LangChainStreamAdapter:
 
         run_id = _optional_string(raw_event.get("run_id")) or str(len(self._usage_by_run_id))
         self._usage_by_run_id[run_id] = dict(usage)
+
+
+def _candidate_from_tool_result(
+    tool_name: str, raw: Mapping[object, object]
+) -> CandidatePlace | None:
+    candidate_id = _optional_string(raw.get("candidate_id"))
+    name = _optional_string(raw.get("name"))
+    lat = _finite_number(raw.get("lat"))
+    lng = _finite_number(raw.get("lng"))
+    if candidate_id is None or name is None or lat is None or lng is None:
+        return None
+
+    if tool_name == GET_NEARBY_PLACES_TOOL_NAME:
+        subtitle = _as_string(raw.get("address"))
+        detail = _join_detail(
+            [
+                _as_string(raw.get("primary_type")),
+                _format_rating(raw.get("rating")),
+                _format_distance(raw.get("distance_km")),
+            ]
+        )
+        source: Literal["nearby", "attractions"] = "nearby"
+    else:
+        subtitle = _as_string(raw.get("neighborhood"))
+        detail = _join_detail(
+            [
+                _as_string(raw.get("category")),
+                _format_distance(raw.get("distance_km")),
+            ]
+        )
+        source = "attractions"
+
+    return CandidatePlace(
+        candidate_id=candidate_id,
+        source=source,
+        name=name,
+        lat=lat,
+        lng=lng,
+        subtitle=subtitle,
+        detail=detail,
+    )
+
+
+def _format_rating(value: object) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"★ {value}"
+    return ""
+
+
+def _format_distance(value: object) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value} km"
+    return ""
+
+
+def _join_detail(parts: list[str]) -> str:
+    return " · ".join(part for part in parts if part)
+
+
+def _as_string(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        numeric = float(value)
+        if numeric == numeric and numeric not in {float("inf"), float("-inf")}:
+            return numeric
+    return None
 
 
 def _event_data(raw_event: Mapping[object, object]) -> object:

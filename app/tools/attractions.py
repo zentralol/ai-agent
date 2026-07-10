@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Mapping
 from functools import lru_cache
@@ -176,8 +177,10 @@ def _to_attraction(
 ) -> dict[str, Any]:
     # The attraction's own coordinates are public and returned so the client can
     # offer navigation. The user's coordinates are never returned.
+    name = _as_string(row.get("Name"))
     return {
-        "name": _as_string(row.get("Name")),
+        "candidate_id": _candidate_id(row.get("id"), name, lat, lng),
+        "name": name,
         "category": _as_string(row.get("Category")),
         "neighborhood": _as_string(row.get("Neighborhood")),
         "description": _truncate(_as_string(row.get("Description"))),
@@ -185,6 +188,14 @@ def _to_attraction(
         "lng": lng,
         "distance_km": round(distance_km, 2),
     }
+
+
+def _candidate_id(external_id: object, name: str, lat: float, lng: float) -> str:
+    if external_id is not None and str(external_id).strip():
+        return f"attraction:{str(external_id).strip()}"
+    fallback = f"{name.strip().lower()}|{lat}|{lng}"
+    digest = hashlib.sha256(fallback.encode("utf-8")).hexdigest()[:20]
+    return f"attraction:fallback-{digest}"
 
 
 def _configurable_string(config: RunnableConfig, key: str) -> str | None:
