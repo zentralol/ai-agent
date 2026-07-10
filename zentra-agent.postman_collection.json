@@ -1,0 +1,257 @@
+{
+  "info": {
+    "_postman_id": "b7e4c1a2-9d3f-4c8e-a1b6-7f2c5d90e341",
+    "name": "Zentra Agent API",
+    "description": "Import-and-run collection for the Zentra FastAPI agent service.\n\n## Setup\n1. Start the service: `uv run uvicorn app.main:app --reload --port 8010`\n2. The collection ships with variables (see the collection's **Variables** tab):\n   - `baseUrl` = `http://localhost:8010` — change the port here if you run on a different one.\n   - `userId` = `u1`\n   - `conversationId` = `c1`\n\n## Streaming (SSE)\nThe chat endpoint returns Server-Sent Events (`text/event-stream`). Postman streams the response live: each `data:` frame is one typed event (`message_delta`, `tool_started`, `tool_finished`, `warning`, `done`, `error`). The stream ends with a `done` (or `error`) event and the connection closes on its own.\n\nIf `LLM_API_KEY` is unset, the service returns a deterministic placeholder reply (a `warning` event followed by fallback `message_delta` events), so every request still works with zero external dependencies.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        },
+        "description": "Liveness probe. Returns `{\"status\":\"ok\",\"service\":\"zentra-agent\"}`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"service is zentra-agent\", () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.status).to.eql(\"ok\");",
+              "  pm.expect(body.service).to.eql(\"zentra-agent\");",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat stream — basic",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "text/event-stream" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"message\": \"Recommend one quiet travel spot in one sentence.\",\n  \"client_type\": \"web\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/stream",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "stream"]
+        },
+        "description": "Minimal streaming chat request. Watch the response stream in live as `message_delta` events, ending with `done`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"streams server-sent events\", () => {",
+              "  pm.expect(pm.response.headers.get(\"content-type\") || \"\").to.include(\"text/event-stream\");",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat stream — with conversation id",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "text/event-stream" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"message\": \"Recommend one quiet travel spot in one sentence.\",\n  \"client_type\": \"web\",\n  \"conversation_id\": \"{{conversationId}}\",\n  \"request_id\": \"req-{{$timestamp}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/stream",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "stream"]
+        },
+        "description": "Continues an existing conversation and passes a correlation `request_id`. The terminal `done` event echoes back the `conversation_id`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat stream — iOS client",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "text/event-stream" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"message\": \"Hello!\",\n  \"client_type\": \"ios\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/stream",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "stream"]
+        },
+        "description": "Same endpoint from the iOS public client. `client_type` must be `web` or `ios`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat stream — triggers preferences tool",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "text/event-stream" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"message\": \"Based on my saved preferences, recommend one quiet travel spot for me.\",\n  \"client_type\": \"web\",\n  \"conversation_id\": \"{{conversationId}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/stream",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "stream"]
+        },
+        "description": "A message that nudges the model to call the `get_user_preferences` tool. Expect `tool_started` then `tool_finished` events interleaved with the text. Without Supabase configured, `tool_finished` carries an `error` status and the model continues without stored preferences."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat stream — invalid request (422)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": \"hi\",\n  \"client_type\": \"web\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/agent/stream",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "agent", "stream"]
+        },
+        "description": "Missing the required `user_id`. FastAPI validates at the boundary and returns 422 with a validation error body (no stream is opened)."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 422\", () => pm.response.to.have.status(422));",
+              "pm.test(\"reports the missing field\", () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(JSON.stringify(body)).to.include(\"user_id\");",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "OpenAPI schema",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/openapi.json",
+          "host": ["{{baseUrl}}"],
+          "path": ["openapi.json"]
+        },
+        "description": "The generated OpenAPI document. Interactive docs are also served at `{{baseUrl}}/docs`."
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"documents the stream endpoint\", () => {",
+              "  const body = pm.response.json();",
+              "  pm.expect(body.paths).to.have.property(\"/api/v1/agent/stream\");",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8010",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "u1",
+      "type": "string"
+    },
+    {
+      "key": "conversationId",
+      "value": "c1",
+      "type": "string"
+    }
+  ]
+}

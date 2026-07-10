@@ -1,1 +1,2 @@
-"""MCP tool definitions for AI access to backend-owned capabilities."""
+"""Backend-controlled tools used by the agent."""
+
