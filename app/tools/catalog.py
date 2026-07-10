@@ -11,6 +11,7 @@ from app.tools.places import get_nearby_places
 from app.tools.preferences import get_user_preferences
 from app.tools.recommendations import select_recommended_places
 from app.tools.recommendations_itinerary import get_place_recommendations
+from app.tools.time import get_current_time
 
 AGENT_TOOLS: tuple[BaseTool, ...] = (
     get_user_preferences,
@@ -18,6 +19,7 @@ AGENT_TOOLS: tuple[BaseTool, ...] = (
     get_nearby_places,
     predict_crowd_level,
     select_recommended_places,
+    get_current_time,
     plan_itinerary,
     get_place_recommendations,
 )
