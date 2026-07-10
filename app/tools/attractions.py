@@ -128,19 +128,12 @@ class AttractionsTool:
         )
 
     async def _fetch_rows(self, client: AsyncClient) -> list[Mapping[str, Any]]:
-        started_at = perf_counter()
         response = await (
             client.table(ATTRACTIONS_TABLE)
             .select("id, Name, Category, Neighborhood, Description, lat, lon")
             .execute()
         )
         rows = response.data if isinstance(response.data, list) else []
-        logger.info(
-            "attractions_tool_query_end table=%s rows=%d duration_ms=%.2f",
-            ATTRACTIONS_TABLE,
-            len(rows),
-            _duration_ms(started_at),
-        )
         return [row for row in rows if isinstance(row, Mapping)]
 
     async def _get_client(self) -> AsyncClient | None:

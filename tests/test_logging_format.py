@@ -116,6 +116,14 @@ def test_colored_log_formatter_no_color_when_disabled(
     assert "crowd_tool_unconfigured" in output
 
 
+def test_suppress_noisy_loggers_sets_warning_level() -> None:
+    from app.logging_format import suppress_noisy_loggers
+
+    suppress_noisy_loggers()
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING
+
+
 def test_colored_log_formatter_force_color_without_tty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

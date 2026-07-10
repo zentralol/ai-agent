@@ -125,7 +125,6 @@ class CrowdTool:
         if token:
             headers[SERVICE_TOKEN_HEADER] = token
 
-        started_at = perf_counter()
         response = await self._get_client().post(
             f"{base_url}{PREDICTIONS_PATH}",
             headers=headers,
@@ -135,11 +134,6 @@ class CrowdTool:
                 "targetTime": target_time,
                 "durationMinutes": DURATION_MINUTES,
             },
-        )
-        logger.info(
-            "crowd_tool_request_end status=%d duration_ms=%.2f",
-            response.status_code,
-            _duration_ms(started_at),
         )
         return response
 

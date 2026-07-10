@@ -180,16 +180,10 @@ class ItineraryTool:
         if token:
             headers[SERVICE_TOKEN_HEADER] = token
 
-        started_at = perf_counter()
         response = await self._get_client().post(
             f"{base_url}{ITINERARY_PATH}",
             headers=headers,
             json=payload,
-        )
-        logger.info(
-            "itinerary_tool_request_end status=%d duration_ms=%.2f",
-            response.status_code,
-            _duration_ms(started_at),
         )
         return response
 

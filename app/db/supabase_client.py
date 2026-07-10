@@ -7,13 +7,9 @@ construction so those features do not each reimplement it.
 
 from __future__ import annotations
 
-import logging
-
 from supabase import AsyncClient, AsyncClientOptions, acreate_client
 
 from app.config import Settings
-
-logger = logging.getLogger("zentra_agent.db.supabase_client")
 
 
 async def create_supabase_client(settings: Settings) -> AsyncClient | None:
@@ -28,10 +24,6 @@ async def create_supabase_client(settings: Settings) -> AsyncClient | None:
     if not supabase_url or not service_role_key:
         return None
 
-    logger.info(
-        "supabase_client_init timeout_seconds=%s",
-        settings.supabase_timeout_seconds,
-    )
     return await acreate_client(
         supabase_url=supabase_url,
         supabase_key=service_role_key,
