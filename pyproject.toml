@@ -18,6 +18,7 @@ dependencies = [
   "PyJWT[crypto]",
   "structlog",
   "orjson",
+  "tzdata",
 ]
 
 [project.optional-dependencies]
