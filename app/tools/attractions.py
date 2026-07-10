@@ -110,21 +110,21 @@ class AttractionsTool:
                 next_actions=["Continue without attraction data for this response."],
             )
 
+        # The user's raw coordinates are deliberately NOT included in the
+        # response: only the ranked attractions (with relative distance) go back
+        # to the model, so the LLM never receives the exact device location.
         ranked = _rank_by_distance(rows, lat, lng, limit)
         if not ranked:
             return ToolResponse(
                 status=ToolStatus.SUCCESS,
                 summary="No attractions with usable coordinates were found.",
-                data={"attractions": [], "origin": {"lat": lat, "lng": lng}},
+                data={"attractions": []},
             )
 
         return ToolResponse(
             status=ToolStatus.SUCCESS,
             summary=f"Found the {len(ranked)} nearest attractions.",
-            data={
-                "attractions": ranked,
-                "origin": {"lat": lat, "lng": lng},
-            },
+            data={"attractions": ranked},
         )
 
     async def _fetch_rows(self, client: AsyncClient) -> list[Mapping[str, Any]]:

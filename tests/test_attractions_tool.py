@@ -75,7 +75,7 @@ async def test_tool_uses_device_location_from_config(
             return ToolResponse(
                 status=ToolStatus.SUCCESS,
                 summary="Found the 1 nearest attractions.",
-                data={"attractions": [{"name": "Near"}], "origin": {"lat": lat, "lng": lng}},
+                data={"attractions": [{"name": "Near"}]},
             )
 
     fake = _FakeTool()
@@ -111,6 +111,29 @@ async def test_tool_warns_without_location(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert result.status == ToolStatus.WARNING
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_nearest_result_excludes_raw_user_coordinates() -> None:
+    class _StubTool(AttractionsTool):
+        async def _get_client(self) -> object:  # type: ignore[override]
+            return object()  # non-None so nearest proceeds
+
+        async def _fetch_rows(self, client: object) -> list[dict[str, Any]]:  # type: ignore[override]
+            return [_row("Near", 40.7585, -73.9860), _row("Far", 41.0, -73.0)]
+
+    tool = _StubTool(Settings(_env_file=None))  # type: ignore[call-arg]
+
+    result = await tool.nearest(ORIGIN["lat"], ORIGIN["lng"])
+    dumped = result.model_dump_json()
+
+    assert result.status == ToolStatus.SUCCESS
+    assert result.data["attractions"]
+    # The user's exact location must never reach the model-facing payload.
+    assert "origin" not in result.data
+    assert "lat" not in dumped and "lng" not in dumped
+    for attraction in result.data["attractions"]:
+        assert "lat" not in attraction and "lng" not in attraction
 
 
 @pytest.mark.asyncio
