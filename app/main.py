@@ -3,24 +3,23 @@ import logging
 from fastapi import FastAPI
 
 from app.api.agent import router as agent_router
+from app.logging_format import build_colored_formatter, configure_structlog
 
 
 def _configure_console_logging() -> None:
+    formatter = build_colored_formatter()
     logger = logging.getLogger("zentra_agent")
     logger.setLevel(logging.INFO)
     logger.propagate = False
     if logger.handlers:
+        configure_structlog(formatter=formatter)
         return
 
     handler = logging.StreamHandler()
     handler.setLevel(logging.INFO)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
-    )
+    handler.setFormatter(formatter)
     logger.addHandler(handler)
+    configure_structlog(formatter=formatter)
 
 
 _configure_console_logging()
