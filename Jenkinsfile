@@ -135,6 +135,7 @@ docker run -d \
   --network "${NETWORK_NAME}" \
   --restart unless-stopped \
   -p "${HOST_PORT}:${CONTAINER_PORT}" \
+  -e FORCE_COLOR=1 \
   --env-file "${ENV_FILE}" \
   "${IMAGE}"
 
