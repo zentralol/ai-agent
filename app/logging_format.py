@@ -46,12 +46,23 @@ _ERROR_EVENT_SUFFIXES = ("_unconfigured", "_bad_status", "_failed")
 _DIM_BLUE_KEYS = frozenset({"request_id", "conversation_id", "user"})
 _DIM_KEYS = frozenset({"level"})
 
+_FORCE_COLOR_VARS = ("FORCE_COLOR", "LOG_COLOR")
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no"}
+
 
 def use_color() -> bool:
     """Return True when ANSI colors should be emitted."""
 
     if os.environ.get("NO_COLOR"):
         return False
+    if any(_env_truthy(name) for name in _FORCE_COLOR_VARS):
+        return True
     return sys.stdout.isatty()
 
 

@@ -19,6 +19,10 @@ from app.logging_format import (
         ({"NO_COLOR": "1"}, True, False),
         ({}, False, False),
         ({}, True, True),
+        ({"FORCE_COLOR": "1"}, False, True),
+        ({"LOG_COLOR": "1"}, False, True),
+        ({"FORCE_COLOR": "0"}, False, False),
+        ({"NO_COLOR": "1", "FORCE_COLOR": "1"}, True, False),
     ],
 )
 def test_use_color_respects_no_color_and_tty(
@@ -28,6 +32,8 @@ def test_use_color_respects_no_color_and_tty(
     expected: bool,
 ) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.delenv("LOG_COLOR", raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr("app.logging_format.sys.stdout.isatty", lambda: isatty)
@@ -108,3 +114,28 @@ def test_colored_log_formatter_no_color_when_disabled(
     output = formatter.format(record)
     assert "\033[" not in output
     assert "crowd_tool_unconfigured" in output
+
+
+def test_colored_log_formatter_force_color_without_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.setattr("app.logging_format.sys.stdout.isatty", lambda: False)
+
+    formatter = ColoredLogFormatter(
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    record = logging.LogRecord(
+        name="zentra_agent.tools.places",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="tool_call_start tool=%s request_id=%s",
+        args=("get_nearby_places", "r1"),
+        exc_info=None,
+    )
+    output = formatter.format(record)
+    assert "\033[" in output
+    assert "tool_call_start" in output
