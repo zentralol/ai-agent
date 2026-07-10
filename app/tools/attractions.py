@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from functools import lru_cache
-from math import asin, cos, radians, sin, sqrt
 from time import perf_counter
 from typing import Any
 
@@ -17,6 +16,7 @@ from supabase import AsyncClient
 
 from app.config import Settings, get_settings
 from app.db.supabase_client import create_supabase_client
+from app.geo import as_float, configurable_float, haversine_km
 from app.schemas.tools import ToolResponse, ToolStatus
 
 GET_NEAREST_ATTRACTIONS_TOOL_NAME = "get_nearest_attractions"
@@ -25,7 +25,6 @@ GET_NEAREST_ATTRACTIONS_TOOL_NAME = "get_nearest_attractions"
 ATTRACTIONS_TABLE = "attractions"
 DEFAULT_LIMIT = 5
 DESCRIPTION_MAX_CHARS = 160
-EARTH_RADIUS_KM = 6371.0
 
 logger = logging.getLogger("zentra_agent.tools.attractions")
 
@@ -41,8 +40,8 @@ async def get_nearest_attractions(config: RunnableConfig) -> str:
 
     request_id = _configurable_string(config, "request_id")
     conversation_id = _configurable_string(config, "conversation_id")
-    lat = _configurable_float(config, "lat")
-    lng = _configurable_float(config, "lng")
+    lat = configurable_float(config, "lat")
+    lng = configurable_float(config, "lng")
     started_at = perf_counter()
 
     logger.info(
@@ -161,11 +160,11 @@ def _rank_by_distance(
 ) -> list[dict[str, Any]]:
     scored: list[tuple[float, dict[str, Any]]] = []
     for row in rows:
-        row_lat = _as_float(row.get("lat"))
-        row_lng = _as_float(row.get("lon"))
+        row_lat = as_float(row.get("lat"))
+        row_lng = as_float(row.get("lon"))
         if row_lat is None or row_lng is None:
             continue
-        distance = _haversine_km(lat, lng, row_lat, row_lng)
+        distance = haversine_km(lat, lng, row_lat, row_lng)
         scored.append((distance, _to_attraction(row, distance)))
 
     scored.sort(key=lambda item: item[0])
@@ -182,33 +181,12 @@ def _to_attraction(row: Mapping[str, Any], distance_km: float) -> dict[str, Any]
     }
 
 
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    lat1_r, lng1_r, lat2_r, lng2_r = map(radians, (lat1, lng1, lat2, lng2))
-    d_lat = lat2_r - lat1_r
-    d_lng = lng2_r - lng1_r
-    a = sin(d_lat / 2) ** 2 + cos(lat1_r) * cos(lat2_r) * sin(d_lng / 2) ** 2
-    return 2 * EARTH_RADIUS_KM * asin(sqrt(a))
-
-
 def _configurable_string(config: RunnableConfig, key: str) -> str | None:
     value = config.get("configurable", {}).get(key)
     if not isinstance(value, str):
         return None
     stripped = value.strip()
     return stripped or None
-
-
-def _configurable_float(config: RunnableConfig, key: str) -> float | None:
-    value = config.get("configurable", {}).get(key)
-    return _as_float(value)
-
-
-def _as_float(value: object) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
 
 
 def _as_string(value: object) -> str:

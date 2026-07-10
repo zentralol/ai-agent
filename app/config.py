@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # unset, inbound auth is skipped (development only) and a warning is logged.
     agent_internal_token: str | None = Field(default=None, alias="AGENT_INTERNAL_TOKEN")
 
+    # Google Maps Platform (server-side; enable Places API New). Used by the
+    # nearby-places tool. When unset, that tool degrades with a warning.
+    google_maps_api_key: str | None = Field(default=None, alias="GOOGLE_MAPS_API_KEY")
+
     # Supabase access stays server-side. It is used for controlled preference
     # lookup and later for agent-owned run/trace tables.
     supabase_url: str | None = Field(default=None, alias="SUPABASE_URL")
