@@ -24,7 +24,7 @@ from app.tools.preferences import get_user_preference_tool
 PLAN_ITINERARY_TOOL_NAME = "plan_itinerary"
 ITINERARY_PATH = "/api/v1/itinerary/plan"
 SERVICE_TOKEN_HEADER = "X-Internal-Service-Token"
-HTTP_TIMEOUT_SECONDS = 60.0
+HTTP_TIMEOUT_SECONDS = 120.0
 
 logger = logging.getLogger("zentra_agent.tools.itinerary")
 
