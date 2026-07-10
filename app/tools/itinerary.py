@@ -18,6 +18,7 @@ from langchain_core.tools import tool
 
 from app.config import Settings, get_settings
 from app.schemas.tools import ToolResponse, ToolStatus
+from app.text import is_ascii_only
 from app.tools.preferences import get_user_preference_tool
 
 PLAN_ITINERARY_TOOL_NAME = "plan_itinerary"
@@ -49,10 +50,12 @@ async def plan_itinerary(
     """Build a personalised Manhattan day itinerary for the user.
 
     Call this when the user asks to plan their day, create an itinerary, or
-    suggests a starting place and time. Pass the place name exactly as the
-    user said it (e.g. "The High Line", "Central Park"). Pass anchor_time as
-    an ISO 8601 date-time in New York local time (e.g. "2026-07-10T10:00:00").
-    Pass any extra context the user mentioned (stroller, anniversary, etc.) in
+    suggests a starting place and time. anchor_place MUST be the standard
+    English place name (ASCII only), e.g. "The High Line" or "Central Park",
+    not "中央公园". If the user names a place in another language, translate
+    it to English before calling this tool. Pass anchor_time as an ISO 8601
+    date-time in New York local time (e.g. "2026-07-10T10:00:00"). Pass any
+    extra context the user mentioned (stroller, anniversary, etc.) in
     additional_context. The tool fetches the user's stored preferences and
     returns a full stop-by-stop itinerary with crowd levels and travel tips.
     """
@@ -70,6 +73,25 @@ async def plan_itinerary(
         anchor_place,
         anchor_time,
     )
+
+    if not is_ascii_only(anchor_place):
+        result = ToolResponse(
+            status=ToolStatus.WARNING,
+            summary="anchor_place must be in English (ASCII only).",
+            next_actions=[
+                "Translate the user's place name to standard English "
+                "(e.g. 'Central Park' not '中央公园') and call plan_itinerary again."
+            ],
+        )
+        logger.info(
+            "tool_call_end tool=%s status=%s request_id=%s conversation_id=%s duration_ms=%.2f",
+            PLAN_ITINERARY_TOOL_NAME,
+            result.status.value,
+            request_id,
+            conversation_id,
+            _duration_ms(started_at),
+        )
+        return result.model_dump_json()
 
     result = await get_itinerary_tool().plan(
         user_id=user_id,
