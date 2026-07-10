@@ -18,6 +18,7 @@ from langchain_core.tools import tool
 
 from app.config import Settings, get_settings
 from app.schemas.tools import ToolResponse, ToolStatus
+from app.text import is_ascii_only
 from app.tools.preferences import get_user_preference_tool
 
 RECOMMEND_TOOL_NAME = "get_place_recommendations"
@@ -49,7 +50,9 @@ async def get_place_recommendations(
 
     Use this when the user asks for suggestions or "what should I visit" without
     wanting a full planned itinerary. Pass a natural language query describing
-    what they want (e.g. "quiet art museums", "free outdoor parks for families").
+    what they want in English (ASCII only), e.g. "quiet art museums" or
+    "free outdoor parks for families", not "安静的艺术馆". If the user speaks
+    another language, translate their request to English before calling this tool.
     Optionally filter by category (park, museum, food, landmark, entertainment,
     shopping, bar, art, neighborhood, sports) or budget (free, budget, moderate,
     luxury). count controls how many results to return (default 6, max 12).
@@ -67,6 +70,22 @@ async def get_place_recommendations(
         "tool_call_start tool=%s request_id=%s query=%r category=%s",
         RECOMMEND_TOOL_NAME, request_id, query, category,
     )
+
+    if query and not is_ascii_only(query):
+        result = ToolResponse(
+            status=ToolStatus.WARNING,
+            summary="query must be in English (ASCII only).",
+            next_actions=[
+                "Translate the user's request to English "
+                "(e.g. 'quiet art museums' not '安静的艺术馆') and call "
+                "get_place_recommendations again."
+            ],
+        )
+        logger.info(
+            "tool_call_end tool=%s status=%s request_id=%s duration_ms=%.2f",
+            RECOMMEND_TOOL_NAME, result.status.value, request_id, _duration_ms(started_at),
+        )
+        return result.model_dump_json()
 
     result = await get_recommendations_tool().recommend(
         user_id=user_id,
