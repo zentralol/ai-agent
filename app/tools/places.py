@@ -192,8 +192,9 @@ def _shape_places(
 ) -> list[dict[str, Any]]:
     shaped: list[dict[str, Any]] = []
     for place in places:
-        # The place's own coordinates are used only to compute a relative
-        # distance; neither they nor the user's coordinates are returned.
+        # The place's own coordinates are public and returned so the client can
+        # offer navigation. The user's coordinates are only used here to compute
+        # a relative distance and are never returned.
         location = place.get("location")
         location = location if isinstance(location, dict) else {}
         place_lat = as_float(location.get("latitude"))
@@ -208,6 +209,8 @@ def _shape_places(
                 "name": _nested_text(place.get("displayName")),
                 "address": _as_string(place.get("formattedAddress")),
                 "primary_type": _nested_text(place.get("primaryTypeDisplayName")),
+                "lat": place_lat,
+                "lng": place_lng,
                 "rating": place.get("rating"),
                 "rating_count": place.get("userRatingCount"),
                 "open_now": _open_now(place.get("currentOpeningHours")),

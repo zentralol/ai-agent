@@ -165,18 +165,24 @@ def _rank_by_distance(
         if row_lat is None or row_lng is None:
             continue
         distance = haversine_km(lat, lng, row_lat, row_lng)
-        scored.append((distance, _to_attraction(row, distance)))
+        scored.append((distance, _to_attraction(row, distance, row_lat, row_lng)))
 
     scored.sort(key=lambda item: item[0])
     return [attraction for _, attraction in scored[:limit]]
 
 
-def _to_attraction(row: Mapping[str, Any], distance_km: float) -> dict[str, Any]:
+def _to_attraction(
+    row: Mapping[str, Any], distance_km: float, lat: float, lng: float
+) -> dict[str, Any]:
+    # The attraction's own coordinates are public and returned so the client can
+    # offer navigation. The user's coordinates are never returned.
     return {
         "name": _as_string(row.get("Name")),
         "category": _as_string(row.get("Category")),
         "neighborhood": _as_string(row.get("Neighborhood")),
         "description": _truncate(_as_string(row.get("Description"))),
+        "lat": lat,
+        "lng": lng,
         "distance_km": round(distance_km, 2),
     }
 

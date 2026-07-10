@@ -83,10 +83,12 @@ async def test_search_builds_request_and_shapes_results() -> None:
     assert place["open_now"] is True
     assert place["price_level"] == "PRICE_LEVEL_MODERATE"
     assert isinstance(place["distance_km"], float)
+    # The place's own (public) coordinates are returned for navigation.
+    assert place["lat"] == 40.7585
+    assert place["lng"] == -73.986
 
-    # The user's coordinates must not leak into the model-facing payload.
-    dumped = result.model_dump_json()
-    assert "40.758" not in dumped and "-73.9855" not in dumped
+    # The user's coordinates are never returned: only places + query.
+    assert set(result.data.keys()) == {"places", "query"}
 
 
 @pytest.mark.asyncio
