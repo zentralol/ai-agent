@@ -8,10 +8,10 @@ import pytest
 
 import app.tools.attractions as attractions_module
 from app.config import Settings
+from app.geo import haversine_km
 from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.attractions import (
     AttractionsTool,
-    _haversine_km,
     _rank_by_distance,
     get_nearest_attractions,
 )
@@ -38,9 +38,9 @@ def test_tool_exposes_no_llm_arguments() -> None:
 
 
 def test_haversine_zero_and_one_degree() -> None:
-    assert _haversine_km(40.0, -73.0, 40.0, -73.0) == pytest.approx(0.0, abs=1e-9)
+    assert haversine_km(40.0, -73.0, 40.0, -73.0) == pytest.approx(0.0, abs=1e-9)
     # One degree of latitude is ~111 km.
-    assert _haversine_km(0.0, 0.0, 1.0, 0.0) == pytest.approx(111.19, abs=0.5)
+    assert haversine_km(0.0, 0.0, 1.0, 0.0) == pytest.approx(111.19, abs=0.5)
 
 
 def test_rank_by_distance_orders_nearest_first_and_truncates() -> None:
