@@ -114,7 +114,7 @@ async def test_tool_warns_without_location(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_nearest_result_excludes_raw_user_coordinates() -> None:
+async def test_nearest_returns_place_coords_but_not_user_location() -> None:
     class _StubTool(AttractionsTool):
         async def _get_client(self) -> object:  # type: ignore[override]
             return object()  # non-None so nearest proceeds
@@ -125,15 +125,17 @@ async def test_nearest_result_excludes_raw_user_coordinates() -> None:
     tool = _StubTool(Settings(_env_file=None))  # type: ignore[call-arg]
 
     result = await tool.nearest(ORIGIN["lat"], ORIGIN["lng"])
-    dumped = result.model_dump_json()
 
     assert result.status == ToolStatus.SUCCESS
     assert result.data["attractions"]
-    # The user's exact location must never reach the model-facing payload.
-    assert "origin" not in result.data
-    assert "lat" not in dumped and "lng" not in dumped
+    # Each attraction carries its own (public) coordinates for navigation.
     for attraction in result.data["attractions"]:
-        assert "lat" not in attraction and "lng" not in attraction
+        assert isinstance(attraction["lat"], float)
+        assert isinstance(attraction["lng"], float)
+        # ...but never the user's own location.
+        assert (attraction["lat"], attraction["lng"]) != (ORIGIN["lat"], ORIGIN["lng"])
+    # No field carries the user's coordinates.
+    assert "origin" not in result.data
 
 
 @pytest.mark.asyncio
