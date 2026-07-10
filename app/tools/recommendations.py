@@ -16,10 +16,11 @@ def select_recommended_places(
 ) -> str:
     """Submit the places to show as recommendations, in display order.
 
-    Call this only after a nearby-place or attraction lookup when the final
-    answer recommends one or more returned candidates. Use candidate_id values
-    exactly as returned by the lookup and include only places you recommend.
-    The order of the recommendations list becomes the card order.
+    Call this after get_nearby_places, get_nearest_attractions, or
+    get_place_recommendations when the final answer recommends one or more
+    returned candidates. Use candidate_id values exactly as returned by the
+    lookup and include only places you recommend. The order of the
+    recommendations list becomes the card order.
     """
 
     result = ToolResponse(

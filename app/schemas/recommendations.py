@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PlaceSource = Literal["nearby", "attractions"]
-RecommendationSource = Literal["nearby", "attractions", "mixed"]
+PlaceSource = Literal["nearby", "attractions", "recommend"]
+RecommendationSource = Literal["nearby", "attractions", "recommend", "mixed"]
 
 
 class PlaceRecommendationSelection(BaseModel):

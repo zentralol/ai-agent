@@ -35,11 +35,12 @@ SYSTEM_PROMPT = (
     "a short query; for curated tourist attractions use get_nearest_attractions; to "
     "tell how busy or crowded it is near the user, use predict_crowd_level. These "
     "are grounded in the user's shared device location. Never invent private user "
-    "preferences or locations. When a place lookup returns candidates and you "
-    "recommend any of them, call select_recommended_places with the selected "
-    "candidate_id values in final display order before writing your final answer. "
-    "Mention only those selected places using their exact names. Do not list or "
-    "mention candidates you did not choose. "
+    "preferences or locations. When a place lookup or get_place_recommendations "
+    "returns candidates and you recommend any of them, call select_recommended_places "
+    "with the selected candidate_id values in final display order before writing "
+    "your final answer. Use candidate_id exactly as returned by the tool, not the "
+    "raw id field. Mention only those selected places using their exact names. "
+    "Do not list or mention candidates you did not choose. "
     "When calling plan_itinerary or get_place_recommendations, pass place names "
     "and search queries in English (ASCII only). If the user speaks another "
     "language, translate to the standard English name before calling the tool. "
@@ -114,6 +115,9 @@ async def run_agent_stream(
         return
 
     recommendation_event = adapter.recommendation_event()
+    if recommendation_event is None:
+        adapter.infer_recommendations_from_text("".join(assistant_parts))
+        recommendation_event = adapter.recommendation_event()
     if recommendation_event is not None:
         yield recommendation_event
 

@@ -22,6 +22,7 @@ from pydantic import Field
 
 import app.tools.places as places_module
 import app.tools.preferences as preference_tools
+import app.tools.recommendations_itinerary as recommendations_module
 from app.llm import get_chat_model
 from app.main import app
 from app.schemas.events import EventType
@@ -29,6 +30,7 @@ from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.preferences import GET_USER_PREFERENCES_TOOL_NAME
 from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
+from app.tools.recommendations_itinerary import RECOMMEND_TOOL_NAME
 
 client = TestClient(app)
 
@@ -238,6 +240,42 @@ class _FakePlacesTool:
         )
 
 
+class _FakeRecommendationsTool:
+    async def recommend(self, **kwargs: Any) -> ToolResponse:
+        return ToolResponse(
+            status=ToolStatus.SUCCESS,
+            summary="2 recommendations returned.",
+            data={
+                "recommendations": [
+                    {
+                        "id": "fort-tryon",
+                        "candidate_id": "recommend:fort-tryon",
+                        "name": "Fort Tryon Park",
+                        "lat": 40.8617,
+                        "lon": -73.9326,
+                        "neighborhood": "Washington Heights",
+                        "category": "park",
+                        "crowd_category": "Very quiet",
+                        "hours": "Open until 1:00 AM",
+                    }
+                ],
+                "candidates": [
+                    {
+                        "candidate_id": "recommend:fort-tryon",
+                        "name": "Fort Tryon Park",
+                        "lat": 40.8617,
+                        "lng": -73.9326,
+                        "neighborhood": "Washington Heights",
+                        "category": "park",
+                        "crowd_category": "Very quiet",
+                        "hours": "Open until 1:00 AM",
+                    }
+                ],
+                "based_on": "Quiet parks.",
+            },
+        )
+
+
 def _override_model(model: object) -> Iterator[None]:
     app.dependency_overrides[get_chat_model] = lambda: model
     try:
@@ -430,6 +468,108 @@ def test_stream_emits_only_structured_recommendations_in_selection_order(
             "reason": "Quieter",
         }
     ]
+
+
+def test_stream_emits_recommendations_from_backend_place_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        recommendations_module,
+        "get_recommendations_tool",
+        lambda: _FakeRecommendationsTool(),
+    )
+    model = _FakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": RECOMMEND_TOOL_NAME,
+                        "args": {"query": "quiet parks tonight"},
+                        "id": "call-recommend",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": SELECT_RECOMMENDED_PLACES_TOOL_NAME,
+                        "args": {
+                            "recommendations": [
+                                {
+                                    "candidate_id": "recommend:fort-tryon",
+                                    "reason": "Very quiet",
+                                }
+                            ]
+                        },
+                        "id": "call-select",
+                    }
+                ],
+            ),
+            AIMessage(content="I recommend Fort Tryon Park."),
+        ]
+    )
+
+    with _dependency_override(get_chat_model, model):
+        response = client.post("/api/v1/agent/stream", json=_valid_payload())
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    recommendation_events = [
+        event for event in events if event["type"] == "recommendations"
+    ]
+    assert len(recommendation_events) == 1
+    assert recommendation_events[0]["data"]["items"] == [
+        {
+            "candidate_id": "recommend:fort-tryon",
+            "source": "recommend",
+            "name": "Fort Tryon Park",
+            "lat": 40.8617,
+            "lng": -73.9326,
+            "subtitle": "Washington Heights",
+            "detail": "park · Very quiet · Open until 1:00 AM",
+            "rank": 1,
+            "reason": "Very quiet",
+        }
+    ]
+
+
+def test_stream_backfills_recommendations_when_selection_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        recommendations_module,
+        "get_recommendations_tool",
+        lambda: _FakeRecommendationsTool(),
+    )
+    model = _FakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": RECOMMEND_TOOL_NAME,
+                        "args": {"query": "quiet parks tonight"},
+                        "id": "call-recommend",
+                    }
+                ],
+            ),
+            AIMessage(content="Fort Tryon Park is a peaceful escape tonight."),
+        ]
+    )
+
+    with _dependency_override(get_chat_model, model):
+        response = client.post("/api/v1/agent/stream", json=_valid_payload())
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    recommendation_events = [
+        event for event in events if event["type"] == "recommendations"
+    ]
+    assert len(recommendation_events) == 1
+    assert recommendation_events[0]["data"]["source"] == "recommend"
+    assert recommendation_events[0]["data"]["items"][0]["name"] == "Fort Tryon Park"
 
 
 def test_stream_reconstructs_tool_call_streamed_across_multiple_chunks(

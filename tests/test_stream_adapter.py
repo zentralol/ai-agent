@@ -11,6 +11,7 @@ from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.attractions import GET_NEAREST_ATTRACTIONS_TOOL_NAME
 from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
+from app.tools.recommendations_itinerary import RECOMMEND_TOOL_NAME
 
 
 def _tool_end_event(tool_name: str, response: ToolResponse) -> dict[str, Any]:
@@ -133,3 +134,82 @@ def test_attraction_candidates_are_registered_as_attractions() -> None:
     assert data is not None
     assert data.source == "attractions"
     assert data.items[0].subtitle == "Chelsea"
+
+
+def _recommend_response() -> ToolResponse:
+    return ToolResponse(
+        status=ToolStatus.SUCCESS,
+        summary="2 recommendations returned.",
+        data={
+            "candidates": [
+                {
+                    "candidate_id": "recommend:fort-tryon",
+                    "name": "Fort Tryon Park",
+                    "lat": 40.8617,
+                    "lng": -73.9326,
+                    "neighborhood": "Washington Heights",
+                    "category": "park",
+                    "crowd_category": "Very quiet",
+                    "hours": "Open until 1:00 AM",
+                },
+                {
+                    "candidate_id": "recommend:joes-pub",
+                    "name": "Joe's Pub",
+                    "lat": 40.7282,
+                    "lng": -73.9925,
+                    "neighborhood": "Greenwich Village",
+                    "category": "bar",
+                    "crowd_category": "Moderate",
+                    "hours": "6:00 PM – 2:00 AM",
+                },
+            ]
+        },
+    )
+
+
+def test_recommend_candidates_are_registered_as_recommend() -> None:
+    adapter = LangChainStreamAdapter()
+    adapter.to_zentra_events(
+        _tool_end_event(RECOMMEND_TOOL_NAME, _recommend_response())
+    )
+    adapter.to_zentra_events(
+        _tool_end_event(
+            SELECT_RECOMMENDED_PLACES_TOOL_NAME,
+            ToolResponse(
+                status=ToolStatus.SUCCESS,
+                summary="Selected one.",
+                data={
+                    "recommendations": [
+                        {
+                            "candidate_id": "recommend:fort-tryon",
+                            "reason": "Peaceful escape",
+                        }
+                    ]
+                },
+            ),
+        )
+    )
+
+    data = adapter.recommendation_data
+    assert data is not None
+    assert data.source == "recommend"
+    assert data.items[0].name == "Fort Tryon Park"
+    assert data.items[0].subtitle == "Washington Heights"
+    assert data.items[0].detail == "park · Very quiet · Open until 1:00 AM"
+
+
+def test_infer_recommendations_from_text_backfills_backend_cards() -> None:
+    adapter = LangChainStreamAdapter()
+    adapter.to_zentra_events(
+        _tool_end_event(RECOMMEND_TOOL_NAME, _recommend_response())
+    )
+
+    adapter.infer_recommendations_from_text(
+        "Try Fort Tryon Park for a quiet evening, or Joe's Pub for live music."
+    )
+
+    data = adapter.recommendation_data
+    assert data is not None
+    assert data.source == "recommend"
+    assert [item.name for item in data.items] == ["Fort Tryon Park", "Joe's Pub"]
+    assert [item.rank for item in data.items] == [1, 2]
