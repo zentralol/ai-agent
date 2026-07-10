@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 from time import perf_counter
+from typing import Any
 
 import httpx
 from langchain_core.runnables import RunnableConfig
@@ -106,7 +107,7 @@ class RecommendationsTool:
 
         inline_profile = await self._build_inline_profile(user_id)
 
-        payload: dict = {
+        payload: dict[str, Any] = {
             "inline_profile": inline_profile,
             "count": count,
         }
@@ -131,8 +132,8 @@ class RecommendationsTool:
 
         return _interpret_response(response)
 
-    async def _build_inline_profile(self, user_id: str | None) -> dict:
-        defaults: dict = {
+    async def _build_inline_profile(self, user_id: str | None) -> dict[str, Any]:
+        defaults: dict[str, Any] = {
             "name": "Traveller",
             "interests": [],
             "dietary_preferences": [],
@@ -146,7 +147,7 @@ class RecommendationsTool:
             return defaults
         try:
             pref_result = await get_user_preference_tool().get_user_preferences(user_id)
-            prefs: dict = pref_result.data.get("preferences", {})
+            prefs: dict[str, Any] = pref_result.data.get("preferences", {})
             if not prefs:
                 return defaults
             profile = dict(defaults)
@@ -158,7 +159,7 @@ class RecommendationsTool:
         except Exception:
             return defaults
 
-    async def _post(self, base_url: str, payload: dict) -> httpx.Response:
+    async def _post(self, base_url: str, payload: dict[str, Any]) -> httpx.Response:
         headers = {"Content-Type": "application/json"}
         token = self._settings.agent_internal_token
         if token:

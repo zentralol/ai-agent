@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 from time import perf_counter
+from typing import Any
 
 import httpx
 from langchain_core.runnables import RunnableConfig
@@ -135,10 +136,10 @@ class ItineraryTool:
 
         return _interpret_response(response)
 
-    async def _build_inline_profile(self, user_id: str | None) -> dict:
+    async def _build_inline_profile(self, user_id: str | None) -> dict[str, Any]:
         """Fetch stored preferences and map to inline_profile. Falls back to defaults."""
 
-        defaults: dict = {
+        defaults: dict[str, Any] = {
             "name": "Traveller",
             "interests": [],
             "dietary_preferences": [],
@@ -161,7 +162,7 @@ class ItineraryTool:
             )
             return defaults
 
-        prefs: dict = pref_result.data.get("preferences", {})
+        prefs: dict[str, Any] = pref_result.data.get("preferences", {})
         if not prefs:
             return defaults
 
@@ -173,7 +174,7 @@ class ItineraryTool:
 
         return profile
 
-    async def _post(self, base_url: str, payload: dict) -> httpx.Response:
+    async def _post(self, base_url: str, payload: dict[str, Any]) -> httpx.Response:
         headers = {"Content-Type": "application/json"}
         token = self._settings.agent_internal_token
         if token:
