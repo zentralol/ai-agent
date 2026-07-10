@@ -3,7 +3,11 @@ import logging
 from fastapi import FastAPI
 
 from app.api.agent import router as agent_router
-from app.logging_format import build_colored_formatter, configure_structlog
+from app.logging_format import (
+    build_colored_formatter,
+    configure_structlog,
+    suppress_noisy_loggers,
+)
 
 
 def _configure_console_logging() -> None:
@@ -13,6 +17,7 @@ def _configure_console_logging() -> None:
     logger.propagate = False
     if logger.handlers:
         configure_structlog(formatter=formatter)
+        suppress_noisy_loggers()
         return
 
     handler = logging.StreamHandler()
@@ -20,6 +25,7 @@ def _configure_console_logging() -> None:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     configure_structlog(formatter=formatter)
+    suppress_noisy_loggers()
 
 
 _configure_console_logging()

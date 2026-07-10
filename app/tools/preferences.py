@@ -132,11 +132,6 @@ class UserPreferenceTool:
             return None
 
         started_at = perf_counter()
-        logger.info(
-            "preferences_tool_supabase_query_start table=%s filter=user_id.eq.%s",
-            self._settings.supabase_user_preferences_table,
-            _masked_identifier(user_id),
-        )
         response = await (
             client.table(self._settings.supabase_user_preferences_table)
             .select("*")
@@ -145,29 +140,12 @@ class UserPreferenceTool:
             .execute()
         )
         if response is None:
-            logger.info(
-                "preferences_tool_supabase_query_end table=%s found=false duration_ms=%.2f",
-                self._settings.supabase_user_preferences_table,
-                _duration_ms(started_at),
-            )
             return None
         payload = response.data
 
         if payload is None:
-            logger.info(
-                "preferences_tool_supabase_query_end table=%s found=false duration_ms=%.2f",
-                self._settings.supabase_user_preferences_table,
-                _duration_ms(started_at),
-            )
             return None
         if isinstance(payload, Mapping):
-            logger.info(
-                "preferences_tool_supabase_query_end table=%s found=true "
-                "returned_columns=%s duration_ms=%.2f",
-                self._settings.supabase_user_preferences_table,
-                sorted(str(key) for key in payload),
-                _duration_ms(started_at),
-            )
             return payload
         logger.warning(
             "preferences_tool_supabase_unexpected_payload table=%s payload_type=%s "
@@ -184,11 +162,6 @@ class UserPreferenceTool:
         if supabase_url is None or service_role_key is None:
             return None
         if self._client is None:
-            logger.info(
-                "preferences_tool_supabase_client_init table=%s timeout_seconds=%s",
-                self._settings.supabase_user_preferences_table,
-                self._settings.supabase_timeout_seconds,
-            )
             self._client = await acreate_client(
                 supabase_url=supabase_url,
                 supabase_key=service_role_key,

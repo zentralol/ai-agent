@@ -239,3 +239,10 @@ def configure_structlog(*, formatter: ColoredLogFormatter | None = None) -> None
         handler.setLevel(logging.INFO)
         handler.setFormatter(shared_formatter)
         root.addHandler(handler)
+
+
+def suppress_noisy_loggers() -> None:
+    """Turn down third-party loggers that flood the console at INFO."""
+
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)

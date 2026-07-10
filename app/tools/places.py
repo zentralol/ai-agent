@@ -146,7 +146,6 @@ class PlacesTool:
         self, api_key: str, query: str, lat: float, lng: float
     ) -> list[dict[str, Any]]:
         client = self._get_client()
-        started_at = perf_counter()
         response = await client.post(
             PLACES_SEARCH_TEXT_URL,
             headers={
@@ -169,11 +168,6 @@ class PlacesTool:
         response.raise_for_status()
         payload = response.json()
         places = payload.get("places") if isinstance(payload, dict) else None
-        logger.info(
-            "places_tool_request_end count=%d duration_ms=%.2f",
-            len(places) if isinstance(places, list) else 0,
-            _duration_ms(started_at),
-        )
         return [p for p in places if isinstance(p, dict)] if isinstance(places, list) else []
 
     def _get_client(self) -> httpx.AsyncClient:
