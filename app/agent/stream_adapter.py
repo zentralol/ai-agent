@@ -65,6 +65,15 @@ class LangChainStreamAdapter:
             return None
         return RecommendationsEvent(data=self._recommendation_data)
 
+    def attach_recommendation_summary(self, summary: str) -> None:
+        """Attach a natural-language plan summary to the current selection."""
+
+        if self._recommendation_data is None:
+            return
+        self._recommendation_data = self._recommendation_data.model_copy(
+            update={"summary": summary}
+        )
+
     def infer_recommendations_from_text(self, assistant_text: str) -> None:
         """Backfill cards when the model skipped structured selection."""
 
@@ -108,7 +117,9 @@ class LangChainStreamAdapter:
         return [
             {
                 "type": "data-places",
-                "data": self._recommendation_data.model_dump(mode="json"),
+                "data": self._recommendation_data.model_dump(
+                    mode="json", exclude_none=True
+                ),
             }
         ]
 

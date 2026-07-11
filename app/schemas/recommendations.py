@@ -47,3 +47,6 @@ class RecommendationData(BaseModel):
 
     source: RecommendationSource
     items: list[RecommendationItem]
+    # A short natural-language summary of the plan, generated from the tool
+    # output after selection. Omitted when summarization is unavailable.
+    summary: str | None = Field(default=None, max_length=1000)
