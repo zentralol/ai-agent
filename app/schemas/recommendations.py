@@ -50,3 +50,8 @@ class RecommendationData(BaseModel):
     # A short natural-language summary of the plan, generated from the tool
     # output after selection. Omitted when summarization is unavailable.
     summary: str | None = Field(default=None, max_length=1000)
+    # Target date(s) of the plan, taken from the itinerary anchor time(s), as
+    # ISO dates. A single day sets both to the same value; a multi-day plan
+    # spans the earliest and latest day. Omitted for non-itinerary results.
+    start_date: str | None = None
+    end_date: str | None = None

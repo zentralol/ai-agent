@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping
 from typing import Any, Literal
 
@@ -23,6 +24,7 @@ from app.schemas.recommendations import (
     CandidatePlace,
     RecommendationData,
     RecommendationItem,
+    RecommendationSource,
 )
 from app.schemas.tools import ToolResponse, ToolStatus
 from app.tools.attractions import GET_NEAREST_ATTRACTIONS_TOOL_NAME
@@ -45,6 +47,9 @@ class LangChainStreamAdapter:
         self._streamed_text_run_ids: set[str] = set()
         self._candidates: dict[str, CandidatePlace] = {}
         self._recommendation_data: RecommendationData | None = None
+        # ISO dates of every plan_itinerary call this turn, used to derive the
+        # plan's target date range.
+        self._itinerary_dates: set[str] = set()
 
     @property
     def usage(self) -> dict[str, Any] | None:
@@ -83,7 +88,9 @@ class LangChainStreamAdapter:
         for source in ("recommend", "itinerary"):
             selected = self._match_candidates_in_text(assistant_text, source)
             if selected:
-                self._recommendation_data = RecommendationData(source=source, items=selected)
+                self._recommendation_data = self._build_recommendation_data(
+                    source, selected
+                )
                 return
 
     def _match_candidates_in_text(
@@ -144,6 +151,7 @@ class LangChainStreamAdapter:
 
     def _handle_tool_end(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
         events = _tool_finished_events(raw_event)
+        anchor_date = _itinerary_anchor_date(raw_event)
         for event in events:
             if not isinstance(event, ToolFinishedEvent):
                 continue
@@ -155,14 +163,18 @@ class LangChainStreamAdapter:
                 RECOMMEND_TOOL_NAME,
                 PLAN_ITINERARY_TOOL_NAME,
             }:
-                self._register_candidates(event)
+                self._register_candidates(event, anchor_date)
                 if event.tool_name == PLAN_ITINERARY_TOOL_NAME:
+                    if anchor_date is not None:
+                        self._itinerary_dates.add(anchor_date)
                     self._auto_select_itinerary_stops(event.result.data)
             elif event.tool_name == SELECT_RECOMMENDED_PLACES_TOOL_NAME:
                 self._set_recommendations(event.result.data)
         return events
 
-    def _register_candidates(self, event: ToolFinishedEvent) -> None:
+    def _register_candidates(
+        self, event: ToolFinishedEvent, anchor_date: str | None
+    ) -> None:
         if event.tool_name in {RECOMMEND_TOOL_NAME, PLAN_ITINERARY_TOOL_NAME}:
             collection_key = "candidates"
         elif event.tool_name == GET_NEARBY_PLACES_TOOL_NAME:
@@ -176,9 +188,26 @@ class LangChainStreamAdapter:
         for raw in raw_items:
             if not isinstance(raw, Mapping):
                 continue
-            candidate = _candidate_from_tool_result(event.tool_name, raw)
+            candidate = _candidate_from_tool_result(event.tool_name, raw, anchor_date)
             if candidate is not None:
                 self._candidates.setdefault(candidate.candidate_id, candidate)
+
+    def _build_recommendation_data(
+        self, source: RecommendationSource, items: list[RecommendationItem]
+    ) -> RecommendationData:
+        """Attach the target date range when the result includes an itinerary."""
+
+        start_date: str | None = None
+        end_date: str | None = None
+        if source in {"itinerary", "mixed"} and self._itinerary_dates:
+            start_date = min(self._itinerary_dates)
+            end_date = max(self._itinerary_dates)
+        return RecommendationData(
+            source=source,
+            items=items,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     def _set_recommendations(self, data: Mapping[str, Any]) -> None:
         raw_items = data.get("recommendations")
@@ -213,7 +242,7 @@ class LangChainStreamAdapter:
 
         sources = {item.source for item in selected}
         source = next(iter(sources)) if len(sources) == 1 else "mixed"
-        self._recommendation_data = RecommendationData(source=source, items=selected)
+        self._recommendation_data = self._build_recommendation_data(source, selected)
 
     def _auto_select_itinerary_stops(self, data: Mapping[str, Any]) -> None:
         if self._recommendation_data is not None:
@@ -245,7 +274,9 @@ class LangChainStreamAdapter:
         if not selected:
             return
 
-        self._recommendation_data = RecommendationData(source="itinerary", items=selected)
+        self._recommendation_data = self._build_recommendation_data(
+            "itinerary", selected
+        )
 
     def _handle_message_stream(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
         events = _message_events(raw_event)
@@ -286,8 +317,45 @@ class LangChainStreamAdapter:
         self._usage_by_run_id[run_id] = dict(usage)
 
 
+def _itinerary_anchor_date(raw_event: Mapping[object, object]) -> str | None:
+    """Extract the plan's ISO date from the plan_itinerary tool-call input."""
+
+    data = raw_event.get("data")
+    if not isinstance(data, Mapping):
+        return None
+    tool_input = data.get("input")
+    if not isinstance(tool_input, Mapping):
+        return None
+    return _parse_iso_date(tool_input.get("anchor_time"))
+
+
+def _parse_iso_date(value: object) -> str | None:
+    """Return the YYYY-MM-DD date part of an ISO 8601 date-time string."""
+
+    if not isinstance(value, str):
+        return None
+    date_part = value.strip().split("T", 1)[0]
+    try:
+        datetime.date.fromisoformat(date_part)
+    except ValueError:
+        return None
+    return date_part
+
+
+def _format_card_date(iso_date: str | None) -> str:
+    """Render an ISO date as a short card label, e.g. 'Jul 10'."""
+
+    if not iso_date:
+        return ""
+    try:
+        parsed = datetime.date.fromisoformat(iso_date)
+    except ValueError:
+        return ""
+    return f"{parsed:%b} {parsed.day}"
+
+
 def _candidate_from_tool_result(
-    tool_name: str, raw: Mapping[object, object]
+    tool_name: str, raw: Mapping[object, object], anchor_date: str | None = None
 ) -> CandidatePlace | None:
     candidate_id = _optional_string(raw.get("candidate_id"))
     name = _optional_string(raw.get("name"))
@@ -318,6 +386,7 @@ def _candidate_from_tool_result(
     elif tool_name == PLAN_ITINERARY_TOOL_NAME:
         subtitle = _join_detail(
             [
+                _format_card_date(anchor_date),
                 _as_string(raw.get("time")),
                 _as_string(raw.get("neighborhood")),
             ]
