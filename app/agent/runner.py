@@ -29,8 +29,6 @@ from app.schemas.recommendations import RecommendationData
 
 logger = structlog.get_logger(__name__)
 
-MAX_TOOL_STEPS = 5
-
 # Cap the model-written plan summary so a runaway response stays storable.
 MAX_PLAN_SUMMARY_CHARS = 600
 
@@ -70,7 +68,7 @@ async def run_agent_stream(
     request: AgentStreamRequest,
     model: BaseChatModel,
     tools: tuple[BaseTool, ...],
-    max_tool_steps: int = MAX_TOOL_STEPS,
+    max_tool_steps: int | None = None,
 ) -> AsyncIterator[StreamEvent]:
     """Run one agent turn and yield public Zentra stream events.
 
@@ -79,6 +77,9 @@ async def run_agent_stream(
     back. Persistence failures degrade to a stateless single-turn response and
     never break the stream.
     """
+
+    if max_tool_steps is None:
+        max_tool_steps = get_settings().max_tool_steps
 
     repo = conversation_repository.get_conversation_repository()
     persistence = await _prepare_persistence(request, repo)
