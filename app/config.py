@@ -70,6 +70,11 @@ class Settings(BaseSettings):
         default=20, alias="CONVERSATION_HISTORY_LIMIT"
     )
 
+    # Upper bound on agent tool-call steps per turn. plan_itinerary builds a
+    # single day, so multi-day requests call it once per day; this must be high
+    # enough to cover a week-long plan while still guarding runaway tool loops.
+    max_tool_steps: int = Field(default=20, ge=1, alias="MAX_TOOL_STEPS")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

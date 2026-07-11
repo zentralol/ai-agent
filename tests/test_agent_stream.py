@@ -733,6 +733,41 @@ def test_stream_attaches_plan_summary_from_tool_output(
     assert recommendation_events[0]["data"]["summary"] == plan_summary
 
 
+def test_stream_allows_many_tool_steps_for_multi_day_plans(
+    fake_preference_tool: _FakePreferenceTool,
+) -> None:
+    # A multi-day plan calls the day-planning tool once per day, exceeding the
+    # old 5-step ceiling. The turn must complete rather than hit the step limit.
+    calls = 6
+    model = _FakeModel(
+        responses=[
+            *(
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": GET_USER_PREFERENCES_TOOL_NAME,
+                            "args": {},
+                            "id": f"call-{index}",
+                        }
+                    ],
+                )
+                for index in range(calls)
+            ),
+            AIMessage(content="Here is your multi-day plan."),
+        ]
+    )
+
+    with _dependency_override(get_chat_model, model):
+        response = client.post("/api/v1/agent/stream", json=_valid_payload())
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert not any(event["type"] == EventType.ERROR.value for event in events)
+    deltas = [e for e in events if e["type"] == EventType.MESSAGE_DELTA.value]
+    assert "".join(str(e["text"]) for e in deltas) == "Here is your multi-day plan."
+
+
 def test_stream_reconstructs_tool_call_streamed_across_multiple_chunks(
     fake_preference_tool: _FakePreferenceTool,
 ) -> None:
