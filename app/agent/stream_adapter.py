@@ -245,7 +245,12 @@ class LangChainStreamAdapter:
         if not selected:
             return
 
-        self._recommendation_data = RecommendationData(source="itinerary", items=selected)
+        target_time = _optional_string(data.get("anchor_time"))
+        self._recommendation_data = RecommendationData(
+            source="itinerary",
+            items=selected,
+            target_time=target_time,
+        )
 
     def _handle_message_stream(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
         events = _message_events(raw_event)

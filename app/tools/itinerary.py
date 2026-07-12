@@ -156,7 +156,7 @@ class ItineraryTool:
                 next_actions=["Try again or suggest the user retry shortly."],
             )
 
-        return _interpret_response(response)
+        return _interpret_response(response, anchor_time=anchor_time)
 
     async def _build_inline_profile(self, user_id: str | None) -> dict[str, Any]:
         """Fetch stored preferences and map to inline_profile. Falls back to defaults."""
@@ -222,7 +222,7 @@ def get_itinerary_tool() -> ItineraryTool:
     return ItineraryTool(get_settings())
 
 
-def _interpret_response(response: httpx.Response) -> ToolResponse:
+def _interpret_response(response: httpx.Response, *, anchor_time: str) -> ToolResponse:
     if response.status_code != 200:
         logger.warning("itinerary_tool_bad_status status=%d", response.status_code)
         try:
@@ -268,6 +268,7 @@ def _interpret_response(response: httpx.Response) -> ToolResponse:
         summary=f"Itinerary built: {len(enriched_stops)} stops starting at {start_time}.",
         data={
             **data,
+            "anchor_time": anchor_time,
             "stops": enriched_stops,
             "candidates": candidates,
         },

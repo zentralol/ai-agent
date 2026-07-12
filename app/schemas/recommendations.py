@@ -50,3 +50,5 @@ class RecommendationData(BaseModel):
     # A short natural-language summary of the plan, generated from the tool
     # output after selection. Omitted when summarization is unavailable.
     summary: str | None = Field(default=None, max_length=1000)
+    # Planned visit datetime (NY local ISO, e.g. 2026-07-10T16:00:00).
+    target_time: str | None = Field(default=None, max_length=32)
