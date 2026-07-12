@@ -687,6 +687,68 @@ def test_stream_emits_recommendations_from_itinerary_plan(
     )
 
 
+def test_stream_preserves_itinerary_target_time_after_select(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        itinerary_module,
+        "get_itinerary_tool",
+        lambda: _FakeItineraryTool(),
+    )
+    model = _FakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": PLAN_ITINERARY_TOOL_NAME,
+                        "args": {
+                            "anchor_place": "Greenwich Village",
+                            "anchor_time": "2026-07-10T16:00:00",
+                            "duration_hours": 6,
+                        },
+                        "id": "call-itinerary",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": SELECT_RECOMMENDED_PLACES_TOOL_NAME,
+                        "args": {
+                            "recommendations": [
+                                {
+                                    "candidate_id": "itinerary:washington-square",
+                                    "reason": "Historic park stroll",
+                                },
+                                {
+                                    "candidate_id": "itinerary:essex-market",
+                                    "reason": "Vegetarian-friendly dinner",
+                                },
+                            ]
+                        },
+                        "id": "call-select",
+                    }
+                ],
+            ),
+            AIMessage(content="Here is your relaxed Greenwich Village evening."),
+        ]
+    )
+
+    with _dependency_override(get_chat_model, model):
+        response = client.post("/api/v1/agent/stream", json=_valid_payload())
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    recommendation_events = [
+        event for event in events if event["type"] == "recommendations"
+    ]
+    assert len(recommendation_events) == 1
+    assert recommendation_events[0]["data"]["source"] == "itinerary"
+    assert recommendation_events[0]["data"]["target_time"] == "2026-07-10T16:00:00"
+
+
 def test_stream_attaches_plan_summary_from_tool_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

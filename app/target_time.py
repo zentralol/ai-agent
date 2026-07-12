@@ -8,6 +8,11 @@ from datetime import datetime
 # Full date + time, no timezone offset: YYYY-MM-DDTHH:mm or YYYY-MM-DDTHH:mm:ss
 TARGET_TIME_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$")
 _STOP_TIME_PATTERN = re.compile(r"^\d{1,2}:\d{2}$")
+_OFFSET_SUFFIX = re.compile(r"(?:Z|[+-]\d{2}:\d{2})$")
+
+
+def _strip_timezone_suffix(value: str) -> str:
+    return _OFFSET_SUFFIX.sub("", value.strip())
 
 
 def normalize_target_time(value: str | None) -> str | None:
@@ -15,7 +20,7 @@ def normalize_target_time(value: str | None) -> str | None:
 
     if value is None:
         return None
-    stripped = value.strip()
+    stripped = _strip_timezone_suffix(value)
     if not stripped:
         return None
     if not TARGET_TIME_PATTERN.fullmatch(stripped):
