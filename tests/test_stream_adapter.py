@@ -15,17 +15,24 @@ from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
 from app.tools.recommendations_itinerary import RECOMMEND_TOOL_NAME
 
 
-def _tool_end_event(tool_name: str, response: ToolResponse) -> dict[str, Any]:
+def _tool_end_event(
+    tool_name: str,
+    response: ToolResponse,
+    tool_input: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "output": ToolMessage(
+            content=response.model_dump_json(),
+            name=tool_name,
+            tool_call_id="call-1",
+        )
+    }
+    if tool_input is not None:
+        data["input"] = tool_input
     return {
         "event": "on_tool_end",
         "name": tool_name,
-        "data": {
-            "output": ToolMessage(
-                content=response.model_dump_json(),
-                name=tool_name,
-                tool_call_id="call-1",
-            )
-        },
+        "data": data,
     }
 
 
@@ -282,7 +289,7 @@ def _itinerary_response() -> ToolResponse:
 def test_itinerary_auto_selects_all_stops_in_order() -> None:
     adapter = LangChainStreamAdapter()
     adapter.to_zentra_events(
-        _tool_end_event(PLAN_ITINERARY_TOOL_NAME, _itinerary_response())
+        _tool_end_event(PLAN_ITINERARY_TOOL_NAME, _itinerary_response(), {'anchor_place': 'Greenwich Village', 'anchor_time': '2026-07-06T10:00:00', 'duration_hours': 6})
     )
 
     data = adapter.recommendation_data
@@ -292,8 +299,11 @@ def test_itinerary_auto_selects_all_stops_in_order() -> None:
         "Washington Square Park",
         "Essex Market",
     ]
+    assert data.target_time == "2026-07-06T10:00:00"
     assert [item.rank for item in data.items] == [1, 2]
-    assert data.items[0].subtitle == "16:00 · Greenwich Village"
+    assert data.items[0].subtitle == "Jul 6, 2026, 4:00 PM · Greenwich Village"
+    assert data.items[1].subtitle == "Jul 6, 2026, 8:10 PM · Lower East Side"
+    assert data.target_time == "2026-07-06T10:00:00"
     assert data.items[0].detail == "park · Very busy · Open 24 hours"
     assert data.items[0].reason == "Historic park stroll"
 
@@ -302,7 +312,7 @@ def test_infer_recommendations_from_text_backfills_itinerary_cards() -> None:
     adapter = LangChainStreamAdapter()
     response = _itinerary_response()
     response.data.pop("stops", None)
-    adapter.to_zentra_events(_tool_end_event(PLAN_ITINERARY_TOOL_NAME, response))
+    adapter.to_zentra_events(_tool_end_event(PLAN_ITINERARY_TOOL_NAME, response, {'anchor_place': 'Greenwich Village', 'anchor_time': '2026-07-06T10:00:00', 'duration_hours': 6}))
 
     adapter.infer_recommendations_from_text(
         "Start at Washington Square Park, then dinner at Essex Market."
