@@ -239,8 +239,7 @@ async def _call_itinerary_tool(
     except Exception as exc:
         logger.warning(
             "plan_itinerary_failed",
-            anchor_place=anchor_place,
-            anchor_time=anchor_time,
+            extra={"anchor_place": anchor_place, "anchor_time": anchor_time},
             exc_info=exc,
         )
         return ToolResponse(

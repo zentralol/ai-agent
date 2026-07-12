@@ -37,6 +37,10 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.isort]
+known-third-party = ["supabase"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

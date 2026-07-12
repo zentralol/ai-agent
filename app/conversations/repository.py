@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
+from supabase import AsyncClient
+
 from app.config import Settings, get_settings
 from app.conversations.title import title_from_user_message
 from app.db.supabase_client import create_supabase_client
-from supabase import AsyncClient
 
 logger = logging.getLogger("zentra_agent.conversations.repository")
 
