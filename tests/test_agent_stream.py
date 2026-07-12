@@ -284,6 +284,7 @@ class _FakeItineraryTool:
             status=ToolStatus.SUCCESS,
             summary="Itinerary built: 2 stops starting at 16:00.",
             data={
+                "anchor_time": "2026-07-10T16:00:00",
                 "stops": [
                     {
                         "time": "16:00",
@@ -676,6 +677,7 @@ def test_stream_emits_recommendations_from_itinerary_plan(
     ]
     assert len(recommendation_events) == 1
     assert recommendation_events[0]["data"]["source"] == "itinerary"
+    assert recommendation_events[0]["data"]["target_time"] == "2026-07-10T16:00:00"
     assert [item["name"] for item in recommendation_events[0]["data"]["items"]] == [
         "Washington Square Park",
         "Essex Market",

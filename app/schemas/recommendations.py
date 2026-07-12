@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.target_time import normalize_target_time
 
 PlaceSource = Literal["nearby", "attractions", "recommend", "itinerary"]
 RecommendationSource = Literal["nearby", "attractions", "recommend", "itinerary", "mixed"]
@@ -50,3 +52,14 @@ class RecommendationData(BaseModel):
     # A short natural-language summary of the plan, generated from the tool
     # output after selection. Omitted when summarization is unavailable.
     summary: str | None = Field(default=None, max_length=1000)
+    # Planned visit datetime (NY local ISO, e.g. 2026-07-10T16:00:00).
+    target_time: str | None = Field(default=None, max_length=32)
+
+    @field_validator("target_time", mode="before")
+    @classmethod
+    def _validate_target_time(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("target_time must be a string")
+        return normalize_target_time(value)

@@ -104,6 +104,7 @@ async def test_plan_proceeds_with_ascii_anchor_place() -> None:
     )
 
     assert result.status == ToolStatus.SUCCESS
+    assert result.data["anchor_time"] == "2026-07-10T10:00:00"
     assert "1 stops" in result.summary
 
 
@@ -180,6 +181,7 @@ async def test_plan_shapes_navigable_candidates() -> None:
             "why_recommended": "Vegetarian-friendly dinner",
         },
     ]
+    assert result.data["anchor_time"] == "2026-07-10T16:00:00"
     assert (
         result.data["stops"][0]["candidate_id"] == "itinerary:washington-square"
     )
