@@ -14,6 +14,12 @@ from app.tools.places import GET_NEARBY_PLACES_TOOL_NAME
 from app.tools.recommendations import SELECT_RECOMMENDED_PLACES_TOOL_NAME
 from app.tools.recommendations_itinerary import RECOMMEND_TOOL_NAME
 
+_ITINERARY_TOOL_INPUT = {
+    "anchor_place": "Greenwich Village",
+    "anchor_time": "2026-07-06T10:00:00",
+    "duration_hours": 6,
+}
+
 
 def _tool_end_event(
     tool_name: str,
@@ -289,7 +295,11 @@ def _itinerary_response() -> ToolResponse:
 def test_itinerary_auto_selects_all_stops_in_order() -> None:
     adapter = LangChainStreamAdapter()
     adapter.to_zentra_events(
-        _tool_end_event(PLAN_ITINERARY_TOOL_NAME, _itinerary_response(), {'anchor_place': 'Greenwich Village', 'anchor_time': '2026-07-06T10:00:00', 'duration_hours': 6})
+        _tool_end_event(
+            PLAN_ITINERARY_TOOL_NAME,
+            _itinerary_response(),
+            _ITINERARY_TOOL_INPUT,
+        )
     )
 
     data = adapter.recommendation_data
@@ -312,7 +322,9 @@ def test_infer_recommendations_from_text_backfills_itinerary_cards() -> None:
     adapter = LangChainStreamAdapter()
     response = _itinerary_response()
     response.data.pop("stops", None)
-    adapter.to_zentra_events(_tool_end_event(PLAN_ITINERARY_TOOL_NAME, response, {'anchor_place': 'Greenwich Village', 'anchor_time': '2026-07-06T10:00:00', 'duration_hours': 6}))
+    adapter.to_zentra_events(
+        _tool_end_event(PLAN_ITINERARY_TOOL_NAME, response, _ITINERARY_TOOL_INPUT)
+    )
 
     adapter.infer_recommendations_from_text(
         "Start at Washington Square Park, then dinner at Essex Market."
