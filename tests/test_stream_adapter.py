@@ -337,3 +337,56 @@ def test_infer_recommendations_from_text_backfills_itinerary_cards() -> None:
         "Washington Square Park",
         "Essex Market",
     ]
+
+def test_itinerary_target_time_falls_back_to_result_anchor_time() -> None:
+    adapter = LangChainStreamAdapter()
+    response = _itinerary_response()
+    response.data["anchor_time"] = "2026-07-06T10:00:00"
+    adapter.to_zentra_events(_tool_end_event(PLAN_ITINERARY_TOOL_NAME, response))
+
+    data = adapter.recommendation_data
+    assert data is not None
+    assert data.target_time == "2026-07-06T10:00:00"
+
+
+def test_itinerary_select_preserves_target_time() -> None:
+    adapter = LangChainStreamAdapter()
+    response = _itinerary_response()
+    response.data["anchor_time"] = "2026-07-06T10:00:00"
+    adapter.to_zentra_events(
+        _tool_end_event(
+            PLAN_ITINERARY_TOOL_NAME,
+            response,
+            _ITINERARY_TOOL_INPUT,
+        )
+    )
+    adapter.to_zentra_events(
+        _tool_end_event(
+            SELECT_RECOMMENDED_PLACES_TOOL_NAME,
+            ToolResponse(
+                status=ToolStatus.SUCCESS,
+                summary="Selected stops.",
+                data={
+                    "recommendations": [
+                        {
+                            "candidate_id": "itinerary:washington-square",
+                            "reason": "Start here",
+                        },
+                        {
+                            "candidate_id": "itinerary:essex-market",
+                            "reason": "Dinner",
+                        },
+                    ]
+                },
+            ),
+        )
+    )
+
+    data = adapter.recommendation_data
+    assert data is not None
+    assert data.source == "itinerary"
+    assert data.target_time == "2026-07-06T10:00:00"
+    assert [item.name for item in data.items] == [
+        "Washington Square Park",
+        "Essex Market",
+    ]

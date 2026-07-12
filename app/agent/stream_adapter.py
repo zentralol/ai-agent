@@ -90,7 +90,9 @@ class LangChainStreamAdapter:
             selected = self._match_candidates_in_text(assistant_text, source)
             if selected:
                 target_time = (
-                    self._itinerary_anchor_time if source == "itinerary" else None
+                    self._resolved_itinerary_target_time()
+                    if source == "itinerary"
+                    else None
                 )
                 self._recommendation_data = RecommendationData(
                     source=source,
@@ -148,6 +150,7 @@ class LangChainStreamAdapter:
         if event_name == "on_chat_model_end":
             return self._handle_message_end(raw_event)
         if event_name == "on_tool_start":
+            self._capture_itinerary_anchor_time_from_input(raw_event)
             return _tool_started_events(raw_event)
         if event_name == "on_tool_end":
             return self._handle_tool_end(raw_event)
@@ -156,7 +159,7 @@ class LangChainStreamAdapter:
         return []
 
     def _handle_tool_end(self, raw_event: Mapping[object, object]) -> list[StreamEvent]:
-        self._capture_itinerary_anchor_time(raw_event)
+        self._capture_itinerary_anchor_time_from_input(raw_event)
         events = _tool_finished_events(raw_event)
         for event in events:
             if not isinstance(event, ToolFinishedEvent):
@@ -169,6 +172,8 @@ class LangChainStreamAdapter:
                 RECOMMEND_TOOL_NAME,
                 PLAN_ITINERARY_TOOL_NAME,
             }:
+                if event.tool_name == PLAN_ITINERARY_TOOL_NAME:
+                    self._capture_itinerary_anchor_time_from_result(event.result.data)
                 self._register_candidates(event)
                 if event.tool_name == PLAN_ITINERARY_TOOL_NAME:
                     self._auto_select_itinerary_stops(event.result.data)
@@ -176,8 +181,18 @@ class LangChainStreamAdapter:
                 self._set_recommendations(event.result.data)
         return events
 
+    def _store_itinerary_anchor_time(self, raw: str) -> str | None:
+        try:
+            normalized = normalize_target_time(raw)
+        except ValueError:
+            return None
+        if normalized is not None:
+            self._itinerary_anchor_time = normalized
+        return normalized
 
-    def _capture_itinerary_anchor_time(self, raw_event: Mapping[object, object]) -> None:
+    def _capture_itinerary_anchor_time_from_input(
+        self, raw_event: Mapping[object, object]
+    ) -> None:
         tool_name = _optional_string(raw_event.get("name"))
         if tool_name != PLAN_ITINERARY_TOOL_NAME:
             return
@@ -191,13 +206,34 @@ class LangChainStreamAdapter:
             return
 
         anchor_time = _optional_string(tool_input.get("anchor_time"))
-        if anchor_time is None:
-            return
+        if anchor_time is not None:
+            self._store_itinerary_anchor_time(anchor_time)
 
-        try:
-            self._itinerary_anchor_time = normalize_target_time(anchor_time)
-        except ValueError:
-            self._itinerary_anchor_time = None
+    def _capture_itinerary_anchor_time_from_result(
+        self, data: Mapping[str, Any]
+    ) -> None:
+        if self._itinerary_anchor_time is not None:
+            return
+        anchor_time = _optional_string(data.get("anchor_time"))
+        if anchor_time is not None:
+            self._store_itinerary_anchor_time(anchor_time)
+
+    def _resolved_itinerary_target_time(
+        self,
+        *,
+        result_data: Mapping[str, Any] | None = None,
+    ) -> str | None:
+        if self._itinerary_anchor_time is not None:
+            return self._itinerary_anchor_time
+        if result_data is not None:
+            anchor_time = _optional_string(result_data.get("anchor_time"))
+            if anchor_time is not None:
+                stored = self._store_itinerary_anchor_time(anchor_time)
+                if stored is not None:
+                    return stored
+        if self._recommendation_data is not None:
+            return self._recommendation_data.target_time
+        return None
 
     def _register_candidates(self, event: ToolFinishedEvent) -> None:
         if event.tool_name in {RECOMMEND_TOOL_NAME, PLAN_ITINERARY_TOOL_NAME}:
@@ -254,7 +290,14 @@ class LangChainStreamAdapter:
 
         sources = {item.source for item in selected}
         source = next(iter(sources)) if len(sources) == 1 else "mixed"
-        self._recommendation_data = RecommendationData(source=source, items=selected)
+        target_time = self._resolved_itinerary_target_time()
+        if not any(item.source == "itinerary" for item in selected):
+            target_time = None
+        self._recommendation_data = RecommendationData(
+            source=source,
+            items=selected,
+            target_time=target_time,
+        )
 
     def _auto_select_itinerary_stops(self, data: Mapping[str, Any]) -> None:
         if self._recommendation_data is not None:
@@ -286,7 +329,7 @@ class LangChainStreamAdapter:
         if not selected:
             return
 
-        target_time = self._itinerary_anchor_time
+        target_time = self._resolved_itinerary_target_time(result_data=data)
         self._recommendation_data = RecommendationData(
             source="itinerary",
             items=selected,
