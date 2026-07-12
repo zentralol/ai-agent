@@ -14,11 +14,10 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
-from supabase import AsyncClient
-
 from app.config import Settings, get_settings
 from app.conversations.title import title_from_user_message
 from app.db.supabase_client import create_supabase_client
+from supabase import AsyncClient
 
 logger = logging.getLogger("zentra_agent.conversations.repository")
 
@@ -180,6 +179,54 @@ class ConversationRepository:
             .update({"title": title})
             .eq("id", conversation_id)
             .is_("title", "null")
+            .execute()
+        )
+
+    async def load_trip_state(
+        self, conversation_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        """Return the agent-managed trip state for a conversation, if any.
+
+        The query is scoped by ``user_id`` because the agent uses the service-role
+        key, which bypasses row-level security.
+        """
+
+        client = await self._get_client()
+        if client is None:
+            return None
+
+        response = await (
+            client.table(CONVERSATIONS_TABLE)
+            .select("trip_state")
+            .eq("id", conversation_id)
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        if response is None or response.data is None:
+            return None
+        data = response.data if isinstance(response.data, Mapping) else {}
+        trip_state = data.get("trip_state")
+        return trip_state if isinstance(trip_state, dict) else None
+
+    async def save_trip_state(
+        self, conversation_id: str, user_id: str, state: dict[str, Any]
+    ) -> None:
+        """Persist the agent-managed trip state for a conversation.
+
+        The update is scoped by ``user_id`` because the agent uses the service-role
+        key, which bypasses row-level security.
+        """
+
+        client = await self._get_client()
+        if client is None:
+            return
+
+        await (
+            client.table(CONVERSATIONS_TABLE)
+            .update({"trip_state": state})
+            .eq("id", conversation_id)
+            .eq("user_id", user_id)
             .execute()
         )
 

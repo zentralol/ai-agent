@@ -47,9 +47,9 @@ class LangChainStreamAdapter:
         self._streamed_text_run_ids: set[str] = set()
         self._candidates: dict[str, CandidatePlace] = {}
         self._recommendation_data: RecommendationData | None = None
-        # ISO dates of every plan_itinerary call this turn, used to derive the
-        # plan's target date range.
-        self._itinerary_dates: set[str] = set()
+        # ISO date of the most recent plan_itinerary call this turn. The backend
+        # tool only plans a single day, so the saved range is start_date == end_date.
+        self._last_itinerary_anchor_date: str | None = None
 
     @property
     def usage(self) -> dict[str, Any] | None:
@@ -166,7 +166,7 @@ class LangChainStreamAdapter:
                 self._register_candidates(event, anchor_date)
                 if event.tool_name == PLAN_ITINERARY_TOOL_NAME:
                     if anchor_date is not None:
-                        self._itinerary_dates.add(anchor_date)
+                        self._last_itinerary_anchor_date = anchor_date
                     self._auto_select_itinerary_stops(event.result.data)
             elif event.tool_name == SELECT_RECOMMENDED_PLACES_TOOL_NAME:
                 self._set_recommendations(event.result.data)
@@ -195,13 +195,13 @@ class LangChainStreamAdapter:
     def _build_recommendation_data(
         self, source: RecommendationSource, items: list[RecommendationItem]
     ) -> RecommendationData:
-        """Attach the target date range when the result includes an itinerary."""
+        """Attach the target date when the result comes from a single-day itinerary."""
 
         start_date: str | None = None
         end_date: str | None = None
-        if source in {"itinerary", "mixed"} and self._itinerary_dates:
-            start_date = min(self._itinerary_dates)
-            end_date = max(self._itinerary_dates)
+        if source == "itinerary":
+            start_date = self._last_itinerary_anchor_date
+            end_date = self._last_itinerary_anchor_date
         return RecommendationData(
             source=source,
             items=items,
